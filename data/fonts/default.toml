@@ -1,0 +1,15 @@
+# Font style metadata
+name = "Default"
+
+# Optional Google font URL
+google_fonts = "Alegreya:400|Source+Code+Pro:500,700|Cormorant+Garamond:500,500i,700,700i"
+
+# Font families
+heading_font = "Alegreya"
+body_font = "Cormorant Garamond"
+nav_font = "Alegreya"
+mono_font = "Source Code Pro"
+
+# Font size
+font_size = "20"
+font_size_small = "16"
