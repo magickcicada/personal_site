@@ -44,5 +44,5 @@ subtitle = ""
  css_class = ""
 +++
 
-A personal journal/diary-style blog of my personal data analysis & visualization projects for fun &/or learning. Mostly R &/or Stata based projects, maybe with some D3.js or Python here & there.
+A journal/diary-style blog of my personal data analysis & visualization projects for fun &/or learning. Mostly R & Stata based projects, maybe with some D3.js or Python here & there. Focusing on my interests including politics, education policy, mental health, and demography, as well as other general social science. Profanity-laden.
 

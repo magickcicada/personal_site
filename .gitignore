@@ -4,4 +4,6 @@
 .Ruserdata
 personal_site.Rproj
 blogdown
+*.swp
 public/
+img_working/
