@@ -1,0 +1,1447 @@
+---
+title: 'Constructing a Dataset: Modified HDI & Covariates from Census & BLS Data'
+author: David E. Lambert
+date: '2019-06-20'
+slug: constructing-a-dataset-modified-hdi-covariates-from-census-bls-data
+categories:
+  - R
+tags:
+  - R
+  - Wrangling
+  - Data Wrangling
+  - Visualization
+image:
+  caption: ''
+  focal_point: ''
+output: html_document
+---
+
+
+
+<p>The following constructs a county-level dataset of demographic &amp; economic data, mostly from the American Community Survey, the Bureau of Labor Statistics, and the National Center for Health Statistics. These data are used to construct a modified version of the Human Development Index as a benchmark of the quality of life for each county in the US. This project stemmed from another project involving voter turnout rates in the 2016 election, so vutrnout estimates are also included.</p>
+<p>This is a VERY LONG POST, so sorry in advance. There’s a story behind it, but it’s long enough without one! I’m planning several other posts with visualizations and models based on this dataset, so I’ll update with a link to the background at some point.</p>
+<div id="setup" class="section level2">
+<h2>Setup</h2>
+<pre class="r"><code>library(tidycensus) # access Census API
+library(blscrapeR) # access BLS API
+library(tidyverse) # like, everything
+## -- Attaching packages --------------------------------------------------- tidyverse 1.2.1 --
+## v ggplot2 3.2.0     v purrr   0.3.2
+## v tibble  2.1.3     v dplyr   0.8.1
+## v tidyr   0.8.3     v stringr 1.4.0
+## v readr   1.3.1     v forcats 0.4.0
+## -- Conflicts ------------------------------------------------------ tidyverse_conflicts() --
+## x dplyr::filter() masks stats::filter()
+## x dplyr::lag()    masks stats::lag()</code></pre>
+</div>
+<div id="census-api-pull" class="section level2">
+<h2>Census API Pull</h2>
+<p>First, get the whole 2016 ACS 5-Year Estimates variable list for reference.</p>
+<pre class="r"><code>vars16 &lt;- load_variables(2016, &quot;acs5&quot;, cache = T)</code></pre>
+<div id="variable-lists" class="section level3">
+<h3>Variable Lists</h3>
+<div id="age-sex" class="section level4">
+<h4>Age &amp; Sex</h4>
+<p>ACS table <strong>B01001</strong> gives population counts by age group &amp; sex. Line items are:</p>
+<ul>
+<li><strong>001:</strong> Total Population</li>
+<li><strong>002-025:</strong> Male Population
+<ul>
+<li><strong>002:</strong> Total,</li>
+<li><strong>003:</strong> 0-4, <strong>004:</strong> 5-9, <strong>005:</strong> 10-14, <strong>006:</strong> 15-17, <strong>007:</strong> 18-19,</li>
+<li><strong>008:</strong> 20, <strong>009:</strong> 21, <strong>010:</strong> 22-24, <strong>011:</strong> 25-29,</li>
+<li><strong>012:</strong> 30-34, <strong>013:</strong> 35-39,</li>
+<li><strong>014:</strong> 40-44, <strong>015:</strong> 45-49,</li>
+<li><strong>016:</strong> 50-54, <strong>017:</strong> 55-59,</li>
+<li><strong>018:</strong> 60-61, <strong>019:</strong> 62-64, <strong>020:</strong> 65-66, <strong>021:</strong> 67-69,</li>
+<li><strong>022:</strong> 70-74, <strong>023:</strong> 75-79,</li>
+<li><strong>024:</strong> 80-84, <strong>025:</strong> 85+</li>
+</ul></li>
+<li><strong>026-049:</strong> Female Population
+<ul>
+<li><strong>026:</strong> Total,</li>
+<li><strong>027:</strong> 0-4, <strong>028:</strong> 5-9, <strong>029:</strong> 10-14, <strong>030:</strong> 15-17, <strong>031:</strong> 18-19,</li>
+<li><strong>032:</strong> 20, <strong>033:</strong> 21, <strong>034:</strong> 22-24, <strong>035:</strong> 25-29,</li>
+<li><strong>036:</strong> 30-34, <strong>037:</strong> 35-39,</li>
+<li><strong>038:</strong> 40-44, <strong>039:</strong> 45-49,</li>
+<li><strong>040:</strong> 50-54, <strong>041:</strong> 55-59,</li>
+<li><strong>042:</strong> 60-61, <strong>043:</strong> 62-64, <strong>044:</strong> 65-66, <strong>045:</strong> 67-69,</li>
+<li><strong>046:</strong> 70-74, <strong>047:</strong> 75-79,</li>
+<li><strong>048:</strong> 80-84, <strong>049:</strong> 85+</li>
+</ul></li>
+</ul>
+<pre class="r"><code>age &lt;- c(
+  paste0(
+    &quot;B01001_&quot;,
+    str_pad(
+      as.character(seq(1,49,1)),
+      width = 3,
+      side = &quot;left&quot;,
+      pad = &quot;0&quot;
+    )
+  )
+)</code></pre>
+</div>
+<div id="race-ethnicity" class="section level4">
+<h4>Race &amp; Ethnicity</h4>
+<p>Table <strong>B03002</strong> contains estimates of “Hispanic or Latino Origin by Race,” providing race counts within the ethnic groupings of Hispanic or Latino and <em>NOT</em> H/L. The following line items will allow a 7-way race/ethnicity categorization: White , Black , Hispanic or Latino of any race, Asian or Pacific Islander, American Indian or Alaskan Native, Two or More races, and Other. Line items are:</p>
+<ul>
+<li><strong>003:</strong> White alone</li>
+<li><strong>004:</strong> Black or African American alone</li>
+<li><strong>005:</strong> American Indian and Alaskan Native alone</li>
+<li><strong>006:</strong> Asian alone</li>
+<li><strong>007:</strong> Native Hawaiian and Other Pacific Islander alone</li>
+<li><strong>008:</strong> Some other race alone</li>
+<li><strong>009:</strong> Two or more races</li>
+<li><strong>012:</strong> Hispanic or Latino (total of all races)</li>
+</ul>
+<pre class="r"><code>race &lt;- c(
+  paste0(
+    &quot;B03002_&quot;,
+    str_pad(
+      as.character(seq(3,9,1)),
+      width = 3,
+      side = &quot;left&quot;,
+      pad = &quot;0&quot;
+    )
+  ),
+  &quot;B03002_012&quot;
+)</code></pre>
+</div>
+<div id="educational-attainment" class="section level4">
+<h4>Educational Attainment</h4>
+<p><strong>B15003</strong> records attainment for the population 25 and over. Following Measure of America methodology, we need: HS or greater, Bachelor’s or greater, and any post-baccalaureate degree. These are available from:</p>
+<ul>
+<li>HS or greater, less than Bachelor’s:
+<ul>
+<li><strong>017:</strong> Regular high school diploma</li>
+<li><strong>018:</strong> GED or alternative credential</li>
+<li><strong>019:</strong> Some college, less than 1 year</li>
+<li><strong>020:</strong> Some college, 1 or more years, no degree</li>
+<li><strong>021:</strong> Associate’s degree</li>
+</ul></li>
+<li><strong>022:</strong> Bachelor’s degree</li>
+<li>Graduate degree:
+<ul>
+<li><strong>023:</strong> Master’s degree</li>
+<li><strong>024:</strong> Professional school degree</li>
+<li><strong>025:</strong> Doctorate degree</li>
+</ul></li>
+</ul>
+<pre class="r"><code>attainment &lt;- c(
+  paste0(
+    &quot;B15003_&quot;,
+    str_pad(
+      as.character(seq(17,25,1)),
+      width = 3,
+      side = &quot;left&quot;,
+      pad = &quot;0&quot;
+    )
+  )
+)</code></pre>
+</div>
+<div id="school-enrollment" class="section level4">
+<h4>School Enrollment</h4>
+<p><strong>B14001</strong> gives enrollment <em>for the population aged 3 and over</em>.
+* <strong>001</strong> gives the total 3+ population
+* <strong>002</strong> gives those enrolled.</p>
+<pre class="r"><code>enrollment &lt;- c(&quot;B14001_001&quot;, &quot;B14001_002&quot;)</code></pre>
+</div>
+<div id="economic-variables" class="section level4">
+<h4>Economic Variables</h4>
+<ul>
+<li><strong>B20002_001</strong> gives county median personal earnings in the past 12 months, which is of course an average over 2012-2016.</li>
+<li><strong>B19301_001</strong> gives county per capita income in the past 12 months, etc.</li>
+<li><strong>B19083_001</strong> gives county Gini coefficient on income inequality.</li>
+<li><strong>B27010</strong> gives health insurance coverage type by age:
+<ul>
+<li><strong>017:</strong> Under 18, no coverage</li>
+<li><strong>033:</strong> 18-34, no coverage</li>
+<li><strong>050:</strong> 35-64, no coverage</li>
+<li><strong>066:</strong> 65+, no coverage</li>
+</ul></li>
+</ul>
+<pre class="r"><code>economic &lt;- c(&quot;B20002_001&quot;, &quot;B19301_001&quot;, &quot;B19083_001&quot;,
+              &quot;B27010_017&quot;, &quot;B27010_033&quot;, &quot;B27010_050&quot;, &quot;B27010_066&quot;)</code></pre>
+</div>
+<div id="voting-eligibility-adjustments" class="section level4">
+<h4>Voting Eligibility Adjustments</h4>
+<ul>
+<li><strong>B05003</strong> gives nativity and citizenship status estimates by age &amp; sex:
+<ul>
+<li><strong>012:</strong> Male, 18 &amp; over, not a citizen</li>
+<li><strong>023:</strong> Female, 18 &amp; over, not a citizen</li>
+</ul></li>
+<li><strong>B26001_001</strong> gives total group quarters population, type not specified</li>
+</ul>
+<pre class="r"><code>vepadjust &lt;- c(&quot;B05003_012&quot;, &quot;B05003_023&quot;, &quot;B26001_001&quot;)</code></pre>
+</div>
+<div id="combined-variable-list" class="section level4">
+<h4>Combined Variable List</h4>
+<pre class="r"><code>allvars &lt;- c(age, race, attainment, enrollment, economic, vepadjust)</code></pre>
+</div>
+</div>
+<div id="census-api-pull-1" class="section level3">
+<h3>Census API Pull</h3>
+<p>ACS variables - and importantly, geographic shapefiles from <a href="https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-geodatabase-file.html">Census TIGER</a> - are available from the Census Bureau API via <a href="https://walkerke.github.io/tidycensus/index.html">Kyle Walker’s tidycensus package</a>.</p>
+<pre class="r"><code>acspull &lt;- 
+  get_acs(
+    geography = &quot;county&quot;,
+    survey = &quot;acs5&quot;,
+    year = 2016,
+    variables = allvars,
+    geometry = TRUE,
+    shift_geo = TRUE,
+    output = &quot;wide&quot;,
+    key = Sys.getenv(&quot;CENSUS_API_KEY&quot;)
+  )</code></pre>
+<p>Each variable has and estimate, suffixed “E”, and a margin of error, suffixed “M”. Subset only the estimate columns, plus GEOID (5-digit FIPS code as character), NAME (County Name, State Name), &amp; geometry (sf spatial data). Then remove the “E” suffix, not because its necessary, but because its annoying.</p>
+<pre class="r"><code>acspull &lt;- acspull[, c(1,2, which(str_ends(colnames(acspull), &quot;[0-9]E&quot;)), 159)]
+
+colnames(acspull) &lt;- c(&quot;GEOID&quot;,
+                       &quot;NAME&quot;,
+                       str_sub(
+                         colnames(as.data.frame(acspull)[, 3:80]), end = -2
+                       ),
+                       &quot;geometry&quot;)</code></pre>
+</div>
+</div>
+<div id="initial-wrangling" class="section level2">
+<h2>Initial Wrangling</h2>
+<p>Rename, generate/mutate, &amp; subset</p>
+<pre class="r"><code>cnty &lt;- acspull %&gt;% 
+  rename(
+    name = NAME,
+    poptotal = B01001_001,
+    pop_3plus = B14001_001,
+    enrolled = B14001_002,
+    medearn = B20002_001,
+    incpc = B19301_001,
+    gini = B19083_001,
+    gquart = B26001_001
+  ) %&gt;% 
+  mutate(
+    fips = GEOID,
+    pop_under18 = 
+      B01001_003 + B01001_004 + B01001_005 + B01001_006 +
+      B01001_027 + B01001_028 + B01001_029 + B01001_030,
+    pop_under25 = pop_under18 +
+      B01001_007 + B01001_008 + B01001_009 + B01001_010 +
+      B01001_031 + B01001_032 + B01001_033 + B01001_034,
+    pop_324 = pop_under25 - (poptotal - pop_3plus),
+    pop_25plus = poptotal - pop_under25,
+    pop_60plus = 
+      B01001_018 + B01001_019 + B01001_020 + B01001_021 +
+      B01001_022 + B01001_023 + B01001_024 + B01001_025 +
+      B01001_042 + B01001_043 + B01001_044 + B01001_045 +
+      B01001_046 + B01001_046 + B01001_048 + B01001_049,
+    old_prop = pop_60plus / poptotal,
+    female_prop = B01001_026 / poptotal,
+    white_prop = B03002_003 / poptotal,
+    black_prop = B03002_004 / poptotal,
+    hisp_prop = B03002_012 / poptotal,
+    aapi_prop = (B03002_006 + B03002_007) / poptotal,
+    aian_prop = B03002_005 / poptotal,
+    other_prop = B03002_008 / poptotal,
+    multi_prop = B03002_009 / poptotal,
+    hsetc = B15003_017 + B15003_018 + B15003_019 + B15003_020 + B15003_021,
+    bacc = B15003_022,
+    grad = B15003_023 + B15003_024 + B15003_025,
+    unins_prop = (B27010_017 + B27010_033 + B27010_050 + B27010_066) / poptotal,
+    noncit = B05003_012 + B05003_023
+  ) %&gt;% 
+  select(
+    GEOID, fips, name, poptotal, pop_under18, noncit, gquart,
+    pop_3plus, pop_under25, pop_324,
+    pop_25plus, pop_60plus, old_prop,
+    female_prop, white_prop, black_prop, hisp_prop,
+    aapi_prop, aian_prop, other_prop, multi_prop,
+    hsetc, bacc, grad, enrolled,
+    medearn, incpc, gini, unins_prop, geometry
+  )</code></pre>
+<p>Add some geographic identifiers: separated county name, state name, and state abbreviation from the internal dataset included with <code>tidycensus</code>. Also add Census Region &amp; Division from R internal datasets.</p>
+<pre class="r"><code>data(&quot;fips_codes&quot;)
+
+fips_codes &lt;- fips_codes %&gt;% 
+  mutate(fips = paste0(state_code, county_code)) %&gt;% 
+  select(fips, state, state_name, county)
+
+regdiv &lt;-
+  tibble(state = state.abb,
+         region = state.region,
+         division = state.division) %&gt;% 
+  rbind(c(&quot;DC&quot;, &quot;South&quot;, &quot;South Atlantic&quot; ))
+
+fips_codes &lt;- left_join(fips_codes, regdiv)
+## Joining, by = &quot;state&quot;
+
+cnty &lt;- left_join(cnty, fips_codes)
+## Joining, by = &quot;fips&quot;
+
+cnty &lt;- cnty[, c(1:2, 30:32, 3, 33:34, 4:29, 35)]</code></pre>
+<div id="missing-value-aka-daggett-county" class="section level3">
+<h3>Missing Value, AKA Daggett County</h3>
+<p>Check for any missing values. There shouldn’t be any in ACS 5-Year data, but sometimes something gets overlooked, or the margins of error are wide enough that they include 0 due to small populations &amp; thus sample sizes.</p>
+<pre class="r"><code>which(sapply(cnty, anyNA))
+## medearn 
+##      31
+
+as.data.frame(cnty) %&gt;%
+  filter(is.na(medearn)) %&gt;% 
+  select(fips, county, state, poptotal, medearn, incpc)
+##    fips         county state poptotal medearn incpc
+## 1 49009 Daggett County    UT      751      NA 27182</code></pre>
+<p><a href="https://en.wikipedia.org/wiki/Daggett_County,_Utah">Daggett County, Utah</a> is missing median earnings, the only missing datum from the ACS 5-Year pull. This may be due to a sample size issue, since the population estimate is so low. It <em>does</em> have an estimate for per-capita income, indicating that there is <em>some</em> personal finance data available for the county. However per-capita income is a poor proxy for median earnings, since it is a mean across <em>all</em> population, including those under 16, who are excluded from the raw earnings data that goes into median earnings (not to mention the earnings/income distinction!).</p>
+<p>To try and impute the missing value, we’ll look at some possible proxies from the ACS and compare them to the the ACS Public Use Microdata Area containing Daggett County and to the BLS’s <a href="https://www.bls.gov/cew/">Quarterly Census of Earnings &amp; Wages</a> (QCEW) data to see if we can come up with a reasonable, reliable estimate.</p>
+<div id="county-level-acs-proxies" class="section level4">
+<h4>County-Level ACS Proxies</h4>
+<p>First, from the same county-level ACS 2016 5-Year estimates as the rest of the data, we’ll pull:</p>
+<ul>
+<li><strong>B08121:</strong> Median earnings by means of transportation to work, and</li>
+<li><strong>B06011:</strong> Median income by place of birth in the United States (nativity)</li>
+<li><strong>B20003:</strong> Aggregate earnings for the population 16 &amp; over, to be divided by:
+<ul>
+<li><strong>B23025:</strong> Employment status for the population 16 &amp; over, to get population figure</li>
+</ul></li>
+</ul>
+<pre class="r"><code>dag_vars &lt;- c(&quot;B08121_001&quot;, &quot;B06011_001&quot;, &quot;B20003_001&quot;, &quot;B23025_001&quot;)
+
+dag_cnty &lt;- 
+  get_acs(
+    geography = &quot;county&quot;,
+    state = &quot;UT&quot;,
+    county = &quot;Daggett&quot;,
+    variables = dag_vars,
+    year = 2016,
+    survey = &quot;acs5&quot;,
+    output = &quot;wide&quot;,
+    key = Sys.getenv(&quot;CENSUS_API_KEY&quot;)
+  ) %&gt;% 
+  mutate(
+    medearn_trans = B08121_001E,
+    medinc_birth = B06011_001E,
+    earnpc_wap = round(B20003_001E / B23025_001E),
+    fips = GEOID,
+    name = NAME
+  ) %&gt;% 
+  select(fips, name, medearn_trans, medinc_birth, earnpc_wap)</code></pre>
+</div>
+<div id="puma-level-acs-proxy" class="section level4">
+<h4>PUMA-Level ACS Proxy</h4>
+<p>Next we’ll pull the same <strong>B20002</strong> median earnings variable as before, but from the PUMA containing Daggett County, 49-13001: Southeast Utah &amp; Uintah Basin Region.</p>
+<pre class="r"><code>dag_puma &lt;- 
+  get_acs(
+    geography = &quot;public use microdata area&quot;, 
+    state = &quot;UT&quot;,
+    variables = &quot;B20002_001&quot;,
+    year = 2016,
+    survey = &quot;acs5&quot;,
+    output = &quot;wide&quot;,
+    key = Sys.getenv(&quot;CENSUS_API_KEY&quot;)
+  ) %&gt;% 
+  filter(GEOID == &quot;4913001&quot;) %&gt;% 
+  rename(medearn_puma = B20002_001E) %&gt;% 
+  mutate(fips = &quot;49009&quot;, name = &quot;Daggett County, Utah&quot;) %&gt;% 
+  select(fips, name, medearn_puma)</code></pre>
+</div>
+<div id="qcew-bls-proxy" class="section level4">
+<h4>QCEW (BLS) Proxy</h4>
+<p>Next we’ll pull average annual wages for the county from the QCEW, using <a href="https://github.com/keberwein/blscrapeR">Kris Eberwein’s blscrapeR package</a>.</p>
+<pre class="r"><code>dag_qcew &lt;- 
+  bls_api(
+    &quot;ENU4900950010&quot;, 
+    startyear = 2016, 
+    endyear = 2016, 
+    Sys.getenv(&quot;BLS_KEY&quot;)
+  ) %&gt;% 
+  rename(fips = seriesID, awage = value) %&gt;% 
+  mutate(
+    fips = str_sub(fips, start = 4, end = 8),
+    name = &quot;Daggett County, Utah&quot;
+  ) %&gt;% 
+  select(fips, name, awage)</code></pre>
+</div>
+<div id="comparison" class="section level4">
+<h4>Comparison</h4>
+<p>Finally, we’ll aggregate all these estimates and compare.</p>
+<pre class="r"><code>dag &lt;- left_join(dag_cnty, dag_puma) %&gt;% left_join(dag_qcew)
+## Joining, by = c(&quot;fips&quot;, &quot;name&quot;)
+## Joining, by = c(&quot;fips&quot;, &quot;name&quot;)
+
+dag
+## # A tibble: 1 x 7
+##   fips  name       medearn_trans medinc_birth earnpc_wap medearn_puma awage
+##   &lt;chr&gt; &lt;chr&gt;              &lt;dbl&gt;        &lt;dbl&gt;      &lt;dbl&gt;        &lt;dbl&gt; &lt;dbl&gt;
+## 1 49009 Daggett C~         60583        23214      25278        30178 32446</code></pre>
+<p>The earnings by transportation to work (<code>medearn_trans</code>) estimate is <em>way</em> off from everything else. Perhaps a weird random sampling error. The estimates for median income by nativity (<code>medinc_birth</code>) and per capita earnings for the working age population (<code>earnpc_wap</code>) broadly agree, with estimates in the low-mid $20,000s. These are slightly lower than median earnings for the wider PUMA (<code>medearn_puma</code>), which makes sense because there would be greater heterogeneity in the larger sample, which would likely include many individuals with higher earnings, given the isolated, rural nature of <a href="https://en.wikipedia.org/wiki/Daggett_County,_Utah">Daggett County</a>.</p>
+<p>I believe that the QCEW average annual wage estimate offers the best method to impute the missing median annual earnings datum. The QCEW wage data are <a href="https://www.bls.gov/cew/cewover.htm">drawn from mandatory administrative payroll reporting</a> (<a href="https://web.archive.org/web/20190202221219/https://www.bls.gov/cew/cewover.htm">archive</a>), offering &gt;95% coverage, and should be more reliable than the ACS samples for very low population counties like Daggett. “Wages” (which include “salaries” in this sense) also represent <a href="https://www.census.gov/newsroom/blogs/random-samplings/2010/09/income-vs-earnings.html">essentially the same definition as “earnings”</a> (<a href="https://web.archive.org/web/*/https://www.census.gov/newsroom/blogs/random-samplings/2010/09/income-vs-earnings.html">archive</a>), as opposed to the broader meaning of “income”, so the QCEW estimate gets at the same underlying data as ACS median earnings. However, the QCEW estimates <em>average</em> wages, rather than median. Since earnings, income, and wealth distributions are typically right-skewed, the average will be higher than the median, giving a possibly inaccurate imputation. Therefore, we will obtain QCEW average annual wages for <em>all</em> counties and model ACS median annual earnings as a function of thereof. We’ll predict the median earnings of Daggett County from this model to obtain a hopefully accurate imputation for the missing value.</p>
+</div>
+</div>
+<div id="modeled-median-earnings" class="section level3">
+<h3>Modeled Median Earnings</h3>
+<p>First, we need to get the BLS series codes for all 3,142 counties in <code>cnty</code>. These are composed of a series prefix, the county’s full 5-digit FIPS code, and a specific identifier suffix.</p>
+<pre class="r"><code># vector of all 3,142 FIPS codes
+allfips &lt;- sort(cnty$fips)
+
+# vector of BLS series IDs for each county
+qcewseries &lt;- paste0(&quot;ENU&quot;, allfips, &quot;50010&quot;)</code></pre>
+<p>The BLS API limits queries to 50 series at a time, so we need to split the <code>qcewseries</code> vector into chunks of 50 &amp; store them in a list. The <a href="https://stackoverflow.com/questions/3318333/split-a-vector-into-chunks-in-r">syntax I found on Stack Overflow</a> was a little opaque to me, so here’s an explanation for my own edification:</p>
+<ul>
+<li><code>seq_along(qcewseries)/50</code> divides each index of the vector by 50, so the 50th element will be 1, the 100th will be 2, etc., and the intervening values will be decimals.</li>
+<li><code>ceiling(x)</code> rounds up to the next whole number. So the first 50 elements, with values now between 0.02-1.00, get a 1. The next 50, with values between 1.02-2.00 get a 2, etc. This essentially creates a factor, with each group of 50 assigned an integer level.</li>
+<li><code>split(x, f)</code> splits x into groups according to factor f, which is why we needed the other functions.</li>
+</ul>
+<pre class="r"><code>chunks_qcew &lt;- split(qcewseries, ceiling(seq_along(qcewseries)/50))</code></pre>
+<div id="qcew-pull" class="section level4">
+<h4>QCEW Pull</h4>
+<p>Next we a need a little function to so we can send each of the 63 chunks to the API. We can use this again later when we’re getting unemployment rates.</p>
+<pre class="r"><code>bls2016 &lt;- function(x) {
+  temp &lt;- 
+    bls_api(
+      x,
+      startyear = &quot;2016&quot;,
+      endyear = &quot;2016&quot;,
+      registrationKey = Sys.getenv(&quot;BLS_KEY&quot;)
+    )
+}</code></pre>
+<p>Now we’ll <code>lapply</code> the function to the chunks. This returns a list of data frames, one for each chunk. So we’ll wrangle those into a single data frame &amp; do a little wrangling to retrieve the FIPS codes from the series IDs. (Note: the results of the API call are hidden because we don’t need to read “REQUEST_SUCCEEDED” 63 times.)</p>
+<pre class="r"><code>qcew_out &lt;- lapply(chunks_qcew, bls2016)
+
+qcew &lt;- bind_rows(qcew_out) %&gt;% 
+  mutate(fips = str_sub(seriesID, start = 4, end = 8)) %&gt;% 
+  rename(awage = value) %&gt;% 
+  select(fips, awage) </code></pre>
+</div>
+<div id="qcew-plot-model" class="section level4">
+<h4>QCEW Plot &amp; Model</h4>
+<p>We’ll create a data frame with just FIPS, ACS median earnings, and QCEW average wages for modelling.</p>
+<pre class="r"><code>emod_df &lt;- as.data.frame(cnty) %&gt;% 
+  filter(fips %in% qcew$fips, county != &quot;Daggett County&quot;) %&gt;% 
+  select(fips, medearn) %&gt;% 
+  left_join(qcew)
+## Joining, by = &quot;fips&quot;</code></pre>
+<p>A quick scatter plot with LOESS &amp; linear fits to make sure a simple OLS model makes sense.</p>
+<pre class="r"><code>ggplot(data = emod_df, aes(x = awage, y = medearn)) + 
+  geom_point(size = 2, alpha = 0.1) +
+  geom_smooth(
+    method = &quot;loess&quot;, 
+    aes(color = &quot;LOESS&quot;, fill = &quot;LOESS&quot;), 
+    size = 1.2
+  ) +
+  geom_smooth(
+    method = &quot;lm&quot;,
+    aes(color = &quot;OLS&quot;, fill = &quot;OLS&quot;),
+    size = 1.2
+  ) +
+  scale_color_manual(values = c(&quot;orange2&quot;, &quot;seagreen3&quot;), name = &quot;Model&quot;) +
+  scale_fill_manual(values = c(&quot;orange2&quot;, &quot;seagreen3&quot;), name = &quot;Model&quot;) +
+  theme_minimal()</code></pre>
+<p><img src="/post/2019-06-20-constructing-a-dataset-modified-hdi-covariates-from-census-bls-data_files/figure-html/earnings%20model%20plot-1.png" width="672" /></p>
+<p>OLS looks decent enough to me, with plenty of data &amp; considerable overlap in the low $32,000 <code>awage</code> range. We’ll run a simple regression to get predicted median earnings for Daggett County’s average wages.</p>
+<pre class="r"><code>emod_model &lt;- lm(medearn ~ awage, data = emod_df)
+
+dag_pred &lt;-
+  predict(emod_model, data.frame(awage = qcew$awage[qcew$fips == &quot;49009&quot;])) %&gt;% 
+  round()
+
+dag_pred
+##     1 
+## 25874
+
+dag$earnpc_wap
+## [1] 25278</code></pre>
+<p>The predicted value of $25,874 is quite close to the ACS estimate of per capita earnings for the working age population, $25278, which lends some credence to the imputation model. We’ll fill the imputed value and double-check that there are no longer any missings.</p>
+<pre class="r"><code>cnty$medearn[cnty$fips == &quot;49009&quot;] &lt;- dag_pred
+
+which(sapply(cnty, anyNA))
+## named integer(0)</code></pre>
+</div>
+</div>
+</div>
+<div id="vap-vep-estimates" class="section level2">
+<h2>VAP &amp; VEP Estimates</h2>
+<p>We’ll generate 5 different estimates from which to calculate 2016 voter turnout. VAP, or voting-age population, is the estimated county population age 18 &amp; over. We’ll also generate different estimates of VEP, or voting <em>eligible</em> population, excluding ineligible adult populations like non-citizens and current felons.</p>
+<div id="vap" class="section level3">
+<h3>VAP</h3>
+<p>Simple voting age population: population 18 &amp; over</p>
+<pre class="r"><code>cnty &lt;- cnty %&gt;% 
+  mutate(vap = poptotal - pop_under18)</code></pre>
+</div>
+<div id="vep-1" class="section level3">
+<h3>VEP 1</h3>
+<p>VEP 1 subtracts non-citizens aged 18 &amp; over from VAP. This is the most reliable adjustment to VAP and requires no additional assumptions about eligibility. However, this will somewhat overstate the true VEP because it counts ineligible felons.</p>
+<pre class="r"><code>cnty &lt;- cnty %&gt;% 
+  mutate(vep1 = vap - noncit)</code></pre>
+</div>
+<div id="vep-2" class="section level3">
+<h3>VEP 2</h3>
+<p>From VEP 1, VEP 2 subtracts population living in group quarters in an attempt to account for ineligible incarcerated felons. This is problematic for several reasons.</p>
+<p>First, the 2016 5-year ACS tables don’t offer a breakdown of institutional &amp; non-institutional group quarters. So this would capture those with principal/permanent addresses in dormitories &amp; military barracks, among other things.</p>
+<p>Second, even among the institutional population, we would capture people in nursing homes and skilled nursing facilities, which are eligible voters, even if health &amp; transportation issues prevent make voting less likely.</p>
+<p>Third, the incarcerated population does not include ex-felons or those on parole or probation, the voting eligibility of whom varies by state.</p>
+<p>In short, VEP 2 should probably <em>not</em> be considered a reasonably accurate estimate on its own. But we’ll calculate it anyway for comparison to other approaches, and for some consistency with estimates in other related projects, where I’ve estimated from microdata that breaks down institutional &amp; non-institutional group quarters.</p>
+<pre class="r"><code>cnty &lt;- cnty %&gt;% 
+  mutate(vep2 = vep1 - gquart)</code></pre>
+</div>
+<div id="vep-3-4" class="section level3">
+<h3>VEP 3 &amp; 4</h3>
+<div id="rationale" class="section level4">
+<h4>Rationale</h4>
+<p>To try to get a better estimate of incarcerated felons to be excluded from voting eligibility, we can possibly use county-level prison population estimates from the Vera Institute of Justice’s <a href="http://trends.vera.org/about">Incarceration Trends</a> project (data and codebook <a href="https://github.com/vera-institute/incarceration_trends">here</a>). The data includes daily average jail &amp; prison population estimates by county for 1983-2015, including pretrial jail estimates. Averaging these estimates for 2012-2015 could give a reasonable estimate of county-level incarcerated prisoners of a similar period to the 2012-2016 ACS 5-Year population estimates, with caveats.</p>
+<p>First, not all those incarcerated in jail are felons and thus ineligible to vote. However, it doesn’t strike me as unreasonable to presume that incarceration presents such a barrier to voting that prisoners are generally unlikely to vote, regardless of eligibility. As such, excluding highly unlikely voters probably does not affect turnout rate estimates very much. To account for potential overestimation, <strong>VEP 3</strong> will use only the <em>prison</em> population, excluding any possible non-felons held in jail, while <strong>VEP 4</strong> will use sentenced incarcerees in jails or prisons (excluding those held in jail pre-trial).</p>
+<p>Second, these estimates don’t account for non-incarcerated ineligible felons, for instance those on parole or probation. Nor do they account for disenfranchised ex-felons who have completed their sentences, which are significant in some states like Florida, Virginia, and Kentucky. Nevertheless, it seems to me that it is more appropriate to underestimate those excluded from voting eligibility than to overestimate. Not counting ineligible parolees and ex-felons also likely cancels out some of the eligible prisoner population discussed above. I am not aware of any good unrestricted public data estimating ineligible parolees or ex-felons at the county level, and using state level estimates seems inappropriate since these populations are unlikely to be equally distributed across counties.</p>
+<p>Overall, VEP 3 &amp; 4 seem like a reasonable adjustments for greater accuracy than VEP 1, and certainly more accuracy than VEP 2.</p>
+</div>
+<div id="wrangling" class="section level4">
+<h4>Wrangling</h4>
+<p>The following imports the relevant incarcerated population variables from the Vera Incarceration Trends dataset for 2012-2015. We’ll calculate the <em>sentenced</em> jail population and total sentenced jail/prison. We’ll then calculate an unweighted mean estimate for each county across all four years 2012-2015, rounded to the nearest person. Missing values will be filled with 0, so that when VEP 3 &amp; 4 are calculated, VEP 3 missings will get VEP 1, and VEP 4 missings will get VEP 3.</p>
+<pre class="r"><code>prisoners &lt;- read_csv(&quot;https://www.dropbox.com/s/hhg9puy22b9l09q/incarceration_trends.csv?dl=1&quot;) %&gt;% 
+  filter(year %in% 2012:2015) %&gt;% 
+  mutate(
+    fips = str_pad(fips, width = 5, side = &quot;left&quot;, pad = &quot;0&quot;),
+    prison_sentenced = if_else(is.na(total_prison_pop),
+                               0,
+                               total_prison_pop),
+    total_jail_pop = if_else(is.na(total_jail_pop),
+                             0,
+                             total_jail_pop),
+    total_jail_pretrial = if_else(is.na(total_jail_pretrial),
+                                  0,
+                                  total_jail_pretrial),
+    jail_sentenced = if_else((total_jail_pop - total_jail_pretrial) &lt; 0,
+                             0,
+                             total_jail_pop - total_jail_pretrial)
+  ) %&gt;% 
+  select(fips, prison_sentenced, jail_sentenced) %&gt;% 
+  group_by(fips) %&gt;% 
+  summarise_all(mean) %&gt;% 
+  mutate_if(is.numeric, round)
+
+nrow(prisoners)
+## [1] 3139</code></pre>
+<p>This yields 3,139 county estimates, as opposed to the 3,142 we got from the ACS pull. Let’s see which ones are missing/mismatched.</p>
+<pre class="r"><code>as.data.frame(cnty) %&gt;%
+  select(fips, state, county, poptotal) %&gt;% 
+  anti_join(prisoners)
+## Joining, by = &quot;fips&quot;
+##    fips state          county poptotal
+## 1 36081    NY   Queens County  2310011
+## 2 36005    NY    Bronx County  1436785
+## 3 36047    NY    Kings County  2606852
+## 4 36085    NY Richmond County   473324</code></pre>
+<p>The Vera dataset is missing inmate info for the four non-Manhattan boroughs of New York City, suggesting that all NYC prisoners are counted in New York County (Manhattan). I don’t want to exclude these high-population counties from VEP 3 &amp; 4 estimates, so we’ll distribute the New York County prisoner estimates among all five boroughs proportional to their total population share. This might seem like a bit of a shaky assumption, but we are making best-available estimates, and we have the reliable VAP &amp; VEP 1 estimates to fall back on. An alternative would be to aggregate all the other outer borough estimates with Manhattan into one mega-county, which is something to consider for the future. But there still some interesting analyses &amp; visualizations we can do with the five boroughs separate, so we’ll go this route for now.</p>
+<p>First, we’ll get the population proportions of each borough. The <code>as.data.frame()</code> calls are because <code>cnty</code> is an <code>sf</code> object, and we need to exclude the geometry data.</p>
+<pre class="r"><code>## vector of the boroughs&#39; county names
+nycnames &lt;- c(&quot;New York County&quot;,
+              &quot;Queens County&quot;,
+              &quot;Kings County&quot;,
+              &quot;Bronx County&quot;,
+              &quot;Richmond County&quot;)
+
+
+## subset FIPS code &amp; county names of the boroughs from main data frame
+nycfips &lt;- as.data.frame(cnty) %&gt;% 
+  filter(state == &quot;NY&quot;, county %in% nycnames) %&gt;% 
+  select(fips, county)
+
+## convert to a named vector of the FIPS codes &amp; view to check
+nycfips &lt;- setNames(nycfips$fips, nycfips$county)
+nycfips
+##   Queens County    Bronx County    Kings County New York County 
+##         &quot;36081&quot;         &quot;36005&quot;         &quot;36047&quot;         &quot;36061&quot; 
+## Richmond County 
+##         &quot;36085&quot;
+
+## total nyc population &amp; borough proportions
+nycpop &lt;- sum(as.data.frame(cnty)[which(cnty$fips %in% nycfips), &quot;poptotal&quot;])
+manhattan_prop &lt;- cnty$poptotal[cnty$fips == nycfips[&quot;New York County&quot;]] / nycpop
+brooklyn_prop &lt;- cnty$poptotal[cnty$fips == nycfips[&quot;Kings County&quot;]] / nycpop
+queens_prop &lt;- cnty$poptotal[cnty$fips == nycfips[&quot;Queens County&quot;]] / nycpop
+bronx_prop &lt;- cnty$poptotal[cnty$fips == nycfips[&quot;Bronx County&quot;]] / nycpop
+staten_prop &lt;- cnty$poptotal[cnty$fips == nycfips[&quot;Richmond County&quot;]] / nycpop</code></pre>
+<p>Next we’ll join the <code>prisoner</code> data to <code>cnty</code> &amp; proportionally distribute the Manhattan estimates among the five boroughs.</p>
+<pre class="r"><code>cnty &lt;- left_join(cnty, prisoners)
+## Joining, by = &quot;fips&quot;
+
+## totals to distribute
+nycpris &lt;-  cnty$prison_sentenced[cnty$fips == nycfips[&quot;New York County&quot;]]
+nycjail &lt;- cnty$jail_sentenced[cnty$fips == nycfips[&quot;New York County&quot;]]
+
+## distributions
+cnty$prison_sentenced[cnty$fips == nycfips[&quot;New York County&quot;]] &lt;- 
+  round(nycpris * manhattan_prop)
+cnty$jail_sentenced[cnty$fips == nycfips[&quot;New York County&quot;]] &lt;- 
+  round(nycjail * manhattan_prop)
+
+cnty$prison_sentenced[cnty$fips == nycfips[&quot;Kings County&quot;]] &lt;- 
+  round(nycpris * brooklyn_prop)
+cnty$jail_sentenced[cnty$fips == nycfips[&quot;Kings County&quot;]] &lt;- 
+  round(nycjail * brooklyn_prop)
+
+cnty$prison_sentenced[cnty$fips == nycfips[&quot;Queens County&quot;]] &lt;- 
+  round(nycpris * queens_prop)
+cnty$jail_sentenced[cnty$fips == nycfips[&quot;Queens County&quot;]] &lt;- 
+  round(nycjail * queens_prop)
+
+cnty$prison_sentenced[cnty$fips == nycfips[&quot;Bronx County&quot;]] &lt;- 
+  round(nycpris * bronx_prop)
+cnty$jail_sentenced[cnty$fips == nycfips[&quot;Bronx County&quot;]] &lt;- 
+  round(nycjail * bronx_prop)
+
+cnty$prison_sentenced[cnty$fips == nycfips[&quot;Richmond County&quot;]] &lt;- 
+  round(nycpris * staten_prop)
+cnty$jail_sentenced[cnty$fips == nycfips[&quot;Richmond County&quot;]] &lt;- 
+  round(nycjail * staten_prop)</code></pre>
+<p>Finally, we’ll calculate VEP 3 &amp; 4. We’ll also check for missings, but there should be none since we converted <code>NA</code>’s in <code>prisoners</code> to 0 when we imported.</p>
+<pre class="r"><code>cnty &lt;- cnty %&gt;% 
+  mutate(
+    vep3 = vep1 - prison_sentenced,
+    vep4 = vep3 - jail_sentenced
+  )
+
+sum(is.na(cnty$vep3))
+## [1] 0
+
+sum(is.na(cnty$vep4))
+## [1] 0</code></pre>
+</div>
+</div>
+</div>
+<div id="turnout" class="section level2">
+<h2>Turnout</h2>
+<p>We can get total votes cast per county from the <em>County Presidential Election Returns 2000-2016</em> dataset obtained from the <a href="https://electionlab.mit.edu/data">MIT Election Data Project</a> (data hosted at <a href="https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/VOQCHQ">Harvard Dataverse</a>). The dataset includes rows for per-party vote shares, but we only need total votes cast, so we filter for only one party in the 2016 election. The data are in an .RData file, which can’t be loaded remotely, so we’ll download them to a temp file first.</p>
+<pre class="r"><code>
+temprdata &lt;- tempfile(fileext = &quot;.RData&quot;)
+dataURL &lt;- &quot;https://www.dropbox.com/s/00l3gqzjx5th0ho/countypres_2000-2016.RData?dl=1&quot;
+download.file(dataURL, destfile = temprdata, mode = &quot;wb&quot;)
+
+load(temprdata)
+
+votes &lt;- x %&gt;% 
+  rename(fips = FIPS) %&gt;% 
+  mutate(
+    fips = 
+      as.character(fips) %&gt;% 
+      str_pad(width = 5, side = &quot;left&quot;, pad = &quot;0&quot;)
+  ) %&gt;% 
+  filter(year == &quot;2016&quot;, party == &quot;democrat&quot;) %&gt;% 
+  select(fips, totalvotes)
+
+nrow(votes)
+## [1] 3158</code></pre>
+<div id="mismatches-missings" class="section level3">
+<h3>Mismatches &amp; Missings</h3>
+<p>This data frame has 3,158 rows/FIPS codes, as opposed to the 3,142 in <code>cnty</code>. Let’s investigate:</p>
+<pre class="r"><code>as.data.frame(cnty) %&gt;% select(fips, state, county) %&gt;% anti_join(votes)
+## Joining, by = &quot;fips&quot;
+##     fips state                            county
+## 1  46102    SD              Oglala Lakota County
+## 2  02050    AK                Bethel Census Area
+## 3  02105    AK         Hoonah-Angoon Census Area
+## 4  02122    AK           Kenai Peninsula Borough
+## 5  02150    AK             Kodiak Island Borough
+## 6  02164    AK        Lake and Peninsula Borough
+## 7  02180    AK                  Nome Census Area
+## 8  02188    AK          Northwest Arctic Borough
+## 9  02198    AK Prince of Wales-Hyder Census Area
+## 10 02261    AK        Valdez-Cordova Census Area
+## 11 02158    AK              Kusilvak Census Area
+## 12 02070    AK            Dillingham Census Area
+## 13 02110    AK           Juneau City and Borough
+## 14 02130    AK         Ketchikan Gateway Borough
+## 15 02185    AK               North Slope Borough
+## 16 02195    AK            Petersburg Census Area
+## 17 02220    AK            Sitka City and Borough
+## 18 02230    AK              Skagway Municipality
+## 19 02020    AK            Anchorage Municipality
+## 20 02068    AK                    Denali Borough
+## 21 02013    AK            Aleutians East Borough
+## 22 02275    AK         Wrangell City and Borough
+## 23 02240    AK   Southeast Fairbanks Census Area
+## 24 02090    AK      Fairbanks North Star Borough
+## 25 02100    AK                    Haines Borough
+## 26 02170    AK         Matanuska-Susitna Borough
+## 27 02016    AK        Aleutians West Census Area
+## 28 02060    AK               Bristol Bay Borough
+## 29 02290    AK         Yukon-Koyukuk Census Area
+## 30 02282    AK          Yakutat City and Borough
+## 31 15005    HI                    Kalawao County</code></pre>
+<p>Mismatches are mostly from Alaska, plus Oglala Lakota County, SD and Kalawao County, HI. Let’s also check for missings in the vote totals &amp; track down any that exist.</p>
+<pre class="r"><code>anyNA(votes$totalvotes)
+## [1] TRUE
+
+as.data.frame(cnty) %&gt;%
+  filter(fips %in% votes$fips[is.na(votes$totalvotes)]) %&gt;% 
+  select(fips, county, state)
+##    fips           county state
+## 1 31103 Keya Paha County    NE</code></pre>
+<p>Keya Paha County, NE is missing a vote total.</p>
+<p>Let’s try to fix these issues if possible.</p>
+<div id="keya-paha-county-ne" class="section level4">
+<h4>Keya Paha County, NE</h4>
+<p>Keya Paha’s 2016 vote total of <strong>653</strong> is available from the Nebraska Secretary of State’s <a href="http://www.sos.ne.gov/elec/2016/pdf/2016-canvass-book.pdf">official election returns</a> (<a href="https://web.archive.org/web/20190612013322/http://www.sos.ne.gov/elec/2016/pdf/2016-canvass-book.pdf">archive</a>).</p>
+<pre class="r"><code>votes$totalvotes[votes$fips == &quot;31103&quot;] &lt;- 653</code></pre>
+</div>
+<div id="oglala-lakota-county-sd" class="section level4">
+<h4>Oglala Lakota County, SD</h4>
+<pre class="r"><code>x %&gt;% 
+  filter(
+    year == &quot;2016&quot;,
+    party == &quot;democrat&quot;, 
+    state_po == &quot;SD&quot;, 
+    county == &quot;Oglala Lakota&quot;
+  ) %&gt;% 
+  select(FIPS, county, state_po, totalvotes)
+##    FIPS        county state_po totalvotes
+## 1 46113 Oglala Lakota       SD       2905</code></pre>
+<p>These data appear to use the pre-2015 FIPS code from when Oglala Lakota was known as Shannon County, likely for consistency with the other pre-2015 observations in the MIT dataset. Details of the change can be found <a href="https://www.cdc.gov/nchs/nvss/bridged_race/county_geography-_changes2015.pdf">here</a> (<a href="https://web.archive.org/web/20190611025302/https://www.cdc.gov/nchs/nvss/bridged_race/county_geography-_changes2015.pdf">archive</a>) Correct FIPS to 46102 to match the rest of the data.</p>
+<pre class="r"><code>votes$fips[votes$fips == &quot;46113&quot;] &lt;- &quot;46102&quot;</code></pre>
+</div>
+<div id="kalawao-county-hi" class="section level4">
+<h4>Kalawao County, HI</h4>
+<pre class="r"><code>## shows Kalawao is missing from MIT vote data, not just mis-coded.
+x %&gt;% 
+  filter(
+    year == &quot;2016&quot;,
+    party == &quot;democrat&quot;, 
+    FIPS == &quot;Kalawao County&quot;
+  ) %&gt;% 
+  select(FIPS, county, state_po, totalvotes) %&gt;% 
+  nrow()
+## [1] 0
+
+## shows tiny population of Kalawao
+cnty$poptotal[cnty$fips == &quot;15005&quot;]
+## [1] 91</code></pre>
+<p><a href="https://en.wikipedia.org/wiki/Kalawao_County,_Hawaii">Kalawao County, HI</a>, is a <em>very</em> low population county, formed as a colony to sequester those with Hansen’s disease (historically called leprosy). It does not have its own government, nor administrative structures of any sort. It is administered directly by the Hawaii Department of Health.</p>
+<p>Election results for kalawao don’t appear to be widely available and are missing from the MIT data, <a href="https://uselectionatlas.org/RESULTS/">Dave Leip’s Atlas of U.S. Presidential Elections</a>, and <a href="https://www.nytimes.com/elections/2016/results/hawaii">New York Times/AP Results</a>.</p>
+<p>However, I was able to locate 2016 returns in the <a href="https://elections.hawaii.gov/election-results/">Hawaii Office of Elections</a> detailed precinct results. Kalawao County’s only settlement of Kalaupapa votes by mail as precinct 13-09. Page 234 of the <a href="http://files.hawaii.gov/elections/files/results/2016/general/precinct.pdf">2016 Precint Detail <strong>PDF</strong></a> (<a href="https://web.archive.org/web/20190611040103/http://files.hawaii.gov/elections/files/results/2016/general/precinct.pdf">archive</a>) shows <strong>20 votes</strong> cast for president. We’ll add these votes in when we join a little later.</p>
+</div>
+<div id="alaska" class="section level4">
+<h4>Alaska</h4>
+<p>Alaska is weird as fuck. For lots of reasons. But the weirdness pertinent here is that <a href="https://en.wikipedia.org/wiki/List_of_boroughs_and_census_areas_in_Alaska">Alaska does not have counties</a> in the sense that the other states do, as local government areas responsible directly to the state government. Instead, there are several “boroughs”, which are more or less equivalent to counties and assigned FIPS codes, and a large, discontinuous “Unorganized Borough,” which is subdivided into several “Census Areas”. Electorally, boroughs <em>do <em>not</em> align</em> to the boundaries of electoral districts, as seen in the <a href="http://www.elections.alaska.gov/Core/districtmaps.php">Alaska Division of Elections 2013 district maps maps</a> (<a href="https://web.archive.org/web/20190611133810/http://www.elections.alaska.gov/Core/districtmaps.php">archive</a>) in use in 2016. Alaska reports election results at the district level, not the borough/county-equivalent/FIPS-coded level, so other results sources like the MIT Election Lab data follow this convention.</p>
+<p>All of this presents difficulty when all of our other data is at the FIPS level. Luckily, it appears that <em>precincts</em> seem to follow borough/county-equivalent boundaries, even when the broader state legislative district crosses boundaries. Republican analysis/strategy firm RRH Elections has <a href="https://rrhelections.com/index.php/2018/02/02/alaska-results-by-county-equivalent-1960-2016/">estimated FIPS-level turnout</a> (<a href="https://web.archive.org/web/20190404123624/https://rrhelections.com/index.php/2018/02/02/alaska-results-by-county-equivalent-1960-2016/">archive</a>) for presidential elections using precinct returns and proportionally allocating absentee &amp; early votes (which shouldn’t affect the total vote count, which is all we need). Frustratingly, the data are only available as grainy PNGs &amp; don’t include FIPS. To get usable data, I converted the 2016 PNG to PDF, used Acrobat Pro text recognition, exported to Excel, and manually entered the FIPS codes. And of course triple checked the results, which we’ll further verify below.</p>
+<p>The below checks the manually FIPS-name pairs against the dataset imported from <code>tidycensus</code>. We do find one additional observation in <code>fips_codes</code>, but it refers to pre-2015 name/FIPS of the <a href="https://en.wikipedia.org/wiki/Kusilvak_Census_Area,_Alaska">Kusilvak Census Area</a>, similar to the renaming and recoding of Oglala Lakota, SD above.</p>
+<pre class="r"><code>votes_ak &lt;- read_csv(&quot;https://www.dropbox.com/s/vl21gum7enbqoao/ak2016_fips.csv?dl=1&quot;) %&gt;% slice(1:29)
+## Parsed with column specification:
+## cols(
+##   fips = col_character(),
+##   county_equivalent = col_character(),
+##   clinton = col_character(),
+##   trump = col_character(),
+##   johnson = col_character(),
+##   est_total_votes = col_double()
+## )
+
+fips_ak &lt;- fips_codes %&gt;% filter(state == &quot;AK&quot;) %&gt;% select(fips, county)
+
+## Wade Hampton Census Area is the pre-2015 name/FIPS of Kusilvak.
+anti_join(fips_ak, votes_ak)
+## Joining, by = &quot;fips&quot;
+##    fips                   county
+## 1 02270 Wade Hampton Census Area
+
+## Shows that manually coded FIPS-name pairs match
+votes_ak %&gt;% select(fips, county_equivalent) %&gt;% left_join(fips_ak) %&gt;% 
+  print(n = nrow(.))
+## Joining, by = &quot;fips&quot;
+## # A tibble: 29 x 3
+##    fips  county_equivalent     county                           
+##    &lt;chr&gt; &lt;chr&gt;                 &lt;chr&gt;                            
+##  1 02013 Aleutians East        Aleutians East Borough           
+##  2 02016 Aleutians West        Aleutians West Census Area       
+##  3 02020 Anchorage             Anchorage Municipality           
+##  4 02050 Bethel                Bethel Census Area               
+##  5 02060 Bristol Bay           Bristol Bay Borough              
+##  6 02068 Denali                Denali Borough                   
+##  7 02070 Dillingham            Dillingham Census Area           
+##  8 02090 Fairbanks North Star  Fairbanks North Star Borough     
+##  9 02100 Haines                Haines Borough                   
+## 10 02105 Hoonah-Angoon         Hoonah-Angoon Census Area        
+## 11 02110 Juneau                Juneau City and Borough          
+## 12 02122 Kenai Peninsula       Kenai Peninsula Borough          
+## 13 02130 Ketchikan Gateway     Ketchikan Gateway Borough        
+## 14 02150 Kodiak Island         Kodiak Island Borough            
+## 15 02164 Lake and Peninsula    Lake and Peninsula Borough       
+## 16 02170 Matanuska-Sustina     Matanuska-Susitna Borough        
+## 17 02180 Nome                  Nome Census Area                 
+## 18 02185 North Slope           North Slope Borough              
+## 19 02188 Northwest Arctic      Northwest Arctic Borough         
+## 20 02195 Petersburg            Petersburg Census Area           
+## 21 02198 Prince of Wales-Hyder Prince of Wales-Hyder Census Area
+## 22 02220 Sitka                 Sitka City and Borough           
+## 23 02230 Skagway               Skagway Municipality             
+## 24 02240 Southeast Fairbanks   Southeast Fairbanks Census Area  
+## 25 02261 Valdez-Cordova        Valdez-Cordova Census Area       
+## 26 02158 Kusilvak              Kusilvak Census Area             
+## 27 02275 Wrangell              Wrangell City and Borough        
+## 28 02282 Yakutat               Yakutat City and Borough         
+## 29 02290 Yukon-Koyukuk         Yukon-Koyukuk Census Area</code></pre>
+</div>
+</div>
+<div id="join-fill" class="section level3">
+<h3>Join &amp; Fill</h3>
+<p>First, we’ll subset <code>votes</code> to only the FIPS codes contained in <code>cnty</code> (recall that the miscoded FIPS for Oglala Lakota, SD has already been fixed).</p>
+<pre class="r"><code>votes &lt;- votes %&gt;% 
+  filter(fips %in% cnty$fips)</code></pre>
+<p>Then we’ll bind Alaska estimates and Kalawao County totals, getting the all-important 3,142 rows. We’ll also make sure that the FIPS match. And finally we’ll join <code>votes</code> to <code>cnty</code>.</p>
+<pre class="r"><code>## Attach
+votes &lt;- votes %&gt;% 
+  bind_rows(
+    votes_ak %&gt;% 
+      select(fips, est_total_votes) %&gt;%
+      rename( totalvotes = est_total_votes),
+    list(fips = &quot;15005&quot;, totalvotes = 20)
+  )
+
+## FIPS lists match
+setdiff(cnty$fips, votes$fips)
+## character(0)
+
+## Join
+cnty &lt;- left_join(cnty, votes)
+## Joining, by = &quot;fips&quot;</code></pre>
+</div>
+<div id="turnout-estimates" class="section level3">
+<h3>Turnout Estimates</h3>
+<p>Now that we have wrangled VAP, VEP 1-4, and total votes by county, we can <em>finally</em> calculate turnout estimates for each population estimate.</p>
+<pre class="r"><code>cnty &lt;- cnty %&gt;% 
+  mutate(
+    to_vap = totalvotes / vap,
+    to_vep1 = totalvotes / vep1,
+    to_vep2 = totalvotes / vep2,
+    to_vep3 = totalvotes / vep3,
+    to_vep4 = totalvotes / vep4
+  )</code></pre>
+</div>
+</div>
+<div id="unemployment" class="section level2">
+<h2>Unemployment</h2>
+<p>We’ll get average county unemployment over the six month May-October period preceding the early November 2016 election. We’ll use <a href="https://github.com/keberwein/blscrapeR">blscrapeR package</a> again to access the BLS API.</p>
+<div id="bls-api-pull" class="section level3">
+<h3>BLS API Pull</h3>
+<p>First, we need to get the BLS series codes for county-level unemployment. We’ll split these into chunks as before</p>
+<pre class="r"><code>blsseries &lt;- paste0(&quot;LAUCN&quot;, allfips, &quot;0000000003&quot;)
+chunks_urate &lt;- split(blsseries, ceiling(seq_along(blsseries)/50))</code></pre>
+<p>We’ll reuse the <code>bls2016</code> function we wrote above on the chunks. We’ll do a little wrangling to subset just May-October &amp; summarize to get the average six-month pre-election unemployment rate.</p>
+<pre class="r"><code>unemp_out &lt;- lapply(chunks_urate, bls2016)
+
+ur6mo &lt;- bind_rows(unemp_out) %&gt;% 
+  mutate(
+    fips = str_sub(seriesID, start = 6, end = 10),
+    period = str_sub(period, start = 2) %&gt;% as.numeric()
+  ) %&gt;% 
+  filter(period %in% 5:10) %&gt;% 
+  select(fips, value) %&gt;% 
+  group_by(fips) %&gt;% 
+  summarise(ur6mo = mean(value))
+  </code></pre>
+</div>
+<div id="na-fix-join" class="section level3">
+<h3>NA Fix &amp; Join</h3>
+<pre class="r"><code>cnty$county[cnty$fips == setdiff(cnty$fips, ur6mo$fips)]
+## [1] &quot;Kalawao County&quot;</code></pre>
+<p>The unemployment data are missing one county: Kalawao County, HI once again. This is because the BLS routinely aggregates Kalawao into estimates for the surrounding Maui County, reporting as “Maui + Kalawao”, as seen <a href="https://web.archive.org/web/20170606235908/https://www.bls.gov/regions/west/news-release/countyemploymentandwages_hawaii.htm">here</a> and <a href="https://web.archive.org/web/20190109023506/https://www.bls.gov/cew/boxnotes.htm">here</a>.
+We can try to fill in with ACS 5-Year data, which includes Employment Status estimates in table <strong>S2301</strong>. ACS Subject Tables aren’t available from <code>tidycensus</code>, so we’ll use <a href="https://github.com/hrecht/censusapi">Hannah Recht’s censusapi</a> package.</p>
+<pre class="r"><code>library(censusapi)
+
+kalawao_urate &lt;- 
+  getCensus(
+    name = &quot;acs/acs5/subject&quot;,
+    vintage = 2016,
+    vars = c(&quot;NAME&quot;,
+             &quot;S2301_C01_001E&quot;,
+             &quot;S2301_C01_001M&quot;,
+             &quot;S2301_C02_001E&quot;,
+             &quot;S2301_C02_001M&quot;,
+             &quot;S2301_C03_001E&quot;,
+             &quot;S2301_C03_001M&quot;,
+             &quot;S2301_C04_001E&quot;,
+             &quot;S2301_C04_001M&quot;),
+    region = &quot;county:005&quot;,
+    regionin = &quot;state:15&quot;,
+    key = Sys.getenv(&quot;CENSUS_KEY&quot;)
+  ) %&gt;% 
+  rename(
+    name = NAME,
+    pop = S2301_C01_001E,
+    pop_moe = S2301_C01_001M,
+    lfpr = S2301_C02_001E,
+    lfpr_moe = S2301_C02_001M,
+    epop = S2301_C03_001E,
+    epop_moe = S2301_C03_001M,
+    urate = S2301_C04_001E,
+    urate_moe = S2301_C04_001M,
+  ) %&gt;% 
+  mutate(fips = paste0(state, county)) %&gt;% 
+  select(c(12, 3:11))
+
+kalawao_urate</code></pre>
+<p>We can see the unemployment rate estimate is 0% ± 30.7%, which doesn’t seem very helpful. But according to <a href="https://www.theatlantic.com/health/archive/2015/05/when-the-last-patient-dies/394163/">a 2015 Atlantic article</a>, 16 of the residents were older original inmates at that time, and probably not in the labor force, while the rest appear to be healthcare or preservation workers. These figures roughly match the implied labor force from the LFPR estimate. That is, .84 × 90 = 75.6 and 90 − 16 = 74, so the labor force estimate roughly matches the article’s figures on the non-inmate population of Kalawao, whom the article implies are all government/institutional workers of some sort.</p>
+<p>Based on this information, I believe the 0% unemployment figure is actually accurate. We’ll join the unemployment data and fill 0% unemployment for Kalawao County.</p>
+<pre class="r"><code>cnty &lt;- left_join(cnty, ur6mo)
+## Joining, by = &quot;fips&quot;
+
+cnty$ur6mo[cnty$county == &quot;Kalawao County&quot;] &lt;- 0</code></pre>
+</div>
+</div>
+<div id="hdi" class="section level2">
+<h2>HDI</h2>
+<p>The Measure of America project offers a <a href="http://measureofamerica.org/human-development/">modified version</a> of the UN’s Human Development Index based on data from various US statistical &amp; scientific agencies. The main differences of the <a href="https://mk0moaorgidkh7gsb4pe.kinstacdn.com/wp-content/uploads/2009/05/measureofamerica_methodology.pdf">“American HDI” methodolodgy</a> (<a href="https://web.archive.org/web/20190616184126/https://mk0moaorgidkh7gsb4pe.kinstacdn.com/wp-content/uploads/2009/05/measureofamerica_methodology.pdf">archive</a>) from the <a href="hdr.undp.org/sites/default/files/hdr2018_technical_notes.pdf">UN methodology</a> (<a href="https://web.archive.org/web/20190508051314/http://hdr.undp.org/sites/default/files/hdr2018_technical_notes.pdf">archive</a>) are:</p>
+<ul>
+<li><p>The Education Index is composed of different sub-indices, as opposed to the UN’s equally-weighted mean years of schooling and expected years of schooling. They are:</p>
+<ul>
+<li><p>An Enrollment Index, composed of the school enrollment proportion for ages 3-24, weighted at 1/3.</p></li>
+<li><p>An Attainment Index, composed of the the sum of the proportions of with a high school diploma or greater, a Bachelor’s degree or greater, and a graduate or professional degree, each for ages 25 &amp; over, weighted at 2/3.</p></li>
+</ul></li>
+<li><p>Median personal earnings is used place of per-capita GDP in the Income Index.</p></li>
+<li><p>The final composite Human Development Index is composed of an unweighted arithmetic mean of the Health, Education, and Income sub-indices, in accordance with pre-2010 UN methodology. Current UN methodology uses a <em>geometric</em> mean, so that <a href="http://hdr.undp.org/en/faq-page/human-development-index-hdi#t292n2880">proportional changes in any individual sub-index are equally reflected in the composite index</a> (<a href="https://web.archive.org/web/20190508051318/http://www.hdr.undp.org/en/faq-page/human-development-index-hdi#t292n2880">archive</a>).</p></li>
+</ul>
+<p>The most recent American HDI (AHDI) data available are estimates for 2010. Therefore, we’ll construct our own modified HDI (mHDI) for 2016. We’ll largely follow the Measure of America methodology, but we’ll use a geometric mean on the composite index and make a few tweaks based on public data availability.</p>
+<p>The Education and Income indices are computable from the ACS 5-Year variables we’ve already retrieved, following the AHDI methodology very closely. The Health Index is not, and it presents a few data challenges, so we’ll start with it.</p>
+<div id="health-index" class="section level3">
+<h3>Health Index</h3>
+<p>The AHDI methodology follows the UN in using life expectancy at birth (LEB) for the health index. To the best of my knowledge, there are no publicly-available county-level estimates of LEB for 2016. We could in theory construct full life tables to determine LEB from <a href="https://wonder.cdc.gov/cmf-icd10.html">CDC WONDER Compressed Mortality Files</a>, by County and by age group. However, privacy suppressions in the public-use data would yield a large number of missing values.</p>
+<div id="life-expectancy-proxy" class="section level4">
+<h4>Life Expectancy Proxy</h4>
+<p>Instead of LEB, I propose to use county-level age-adjusted mortality rates (AAMR), also available from CDC WONDER. Since the additional granularity of deaths by age group is not reported in these figures, there are fewer privacy suppressions, and thus less missing data in the end result, than constructing life tables would get us.</p>
+<p>First, we need to determine if AAMR is a reasonable proxy for LEB. The Robert Wood Johnson Foundation’s <a href="https://www.countyhealthrankings.org/explore-health-rankings/rankings-data-documentation">2019 County Health Rankings Data</a> includes both LEB and AAMR data, so we can check the correlation between the two measures. (Note: the <code>data.frame()</code> call at the end of the pipeline is to get rid of all the annoying column specification attributes added by <code>read_csv()</code>.)</p>
+<pre class="r"><code>rwjf &lt;-
+  read_csv(
+    &quot;https://www.dropbox.com/s/0wtoms2ih6vmmyd/analytic_data2019_0.csv?dl=1&quot;,
+    skip = 1
+  ) %&gt;% 
+  filter(countycode != &quot;000&quot;) %&gt;% 
+  select(fipscode, v147_rawvalue, v127_rawvalue) %&gt;% 
+  rename(
+    fips = fipscode,
+    leb = v147_rawvalue,
+    aamr = v127_rawvalue
+  ) %&gt;% 
+  data.frame()
+
+cor(rwjf$leb, rwjf$aamr, use = &quot;pairwise.complete.obs&quot;)
+## [1] -0.9483273</code></pre>
+<p>There is a very strong negative correlation between AAMR and LEB — strong enough that it age-adjusted mortality clearly makes a good proxy for life expectancy.</p>
+<p>The RWJF data cover 2015-2017, so we’ll get the 2016 estimates from the <a href="https://wonder.cdc.gov/cmf-icd10.html">CDC WONDER Compressed Mortality Files</a>.</p>
+<pre class="r"><code>mort &lt;- 
+  read_delim(
+    &quot;https://www.dropbox.com/s/lx1d819yo8hi8g2/Compressed_Mortality_county_2016.txt?dl=1&quot;, 
+    delim = &quot;\t&quot;,
+    skip = 1,
+    col_names = c(&quot;notes&quot;, &quot;county&quot;, &quot;fips&quot;, &quot;deaths&quot;,
+                  &quot;population&quot;, &quot;crude&quot;, &quot;aamr&quot;),
+    na = c(&quot;Suppressed&quot;)
+  ) %&gt;% 
+  filter(fips %in% cnty$fips) %&gt;% 
+  select(fips, aamr)</code></pre>
+<p>Some of the values with wide margins of error have a text flag “(Unreliable)” on the end of the AAMR estimate, forcing the variable into <code>character()</code> class. We’ll use <code>gsub</code> to subset only numerals and decimal points and convert to numeric.</p>
+<pre class="r"><code>mort &lt;- mort %&gt;% 
+  mutate(aamr = gsub(&quot;[^0-9.]&quot;, &quot;&quot;, mort$aamr) %&gt;% as.numeric())</code></pre>
+</div>
+<div id="mortality-imputation" class="section level4">
+<h4>Mortality Imputation</h4>
+<p>We have several missing AAMR estimates, mostly from low-population counties:</p>
+<pre class="r"><code>mort_missing &lt;- as.data.frame(cnty) %&gt;%
+  select(fips, county, state, poptotal) %&gt;% 
+  anti_join(na.omit(mort))
+## Joining, by = &quot;fips&quot;
+
+mort_missing
+##     fips                   county state poptotal
+## 1  08053          Hinsdale County    CO      856
+## 2  08111          San Juan County    CO      552
+## 3  31171            Thomas County    NE      675
+## 4  31183           Wheeler County    NE      805
+## 5  30069         Petroleum County    MT      445
+## 6  31009            Blaine County    NE      580
+## 7  31085             Hayes County    NE     1013
+## 8  31117         McPherson County    NE      425
+## 9  38007          Billings County    ND      936
+## 10 48393           Roberts County    TX      939
+## 11 48433         Stonewall County    TX     1233
+## 12 48263              Kent County    TX      667
+## 13 16025             Camas County    ID      968
+## 14 16033             Clark County    ID      960
+## 15 31007            Banner County    NE      793
+## 16 31075             Grant County    NE      647
+## 17 35021           Harding County    NM      565
+## 18 31115              Loup County    NE      542
+## 19 48033            Borden County    TX      698
+## 20 46063           Harding County    SD     1277
+## 21 46075             Jones County    SD      767
+## 22 46102     Oglala Lakota County    SD    14263
+## 23 48301            Loving County    TX       76
+## 24 38087             Slope County    ND      665
+## 25 46119             Sully County    SD     1456
+## 26 31005            Arthur County    NE      437
+## 27 48173         Glasscock County    TX     1253
+## 28 48269              King County    TX      274
+## 29 28055         Issaquena County    MS     1352
+## 30 30103          Treasure County    MT      846
+## 31 31103         Keya Paha County    NE      736
+## 32 48311          McMullen County    TX      671
+## 33 48261            Kenedy County    TX      558
+## 34 31113             Logan County    NE      830
+## 35 02158     Kusilvak Census Area    AK     7993
+## 36 02230     Skagway Municipality    AK     1014
+## 37 02060      Bristol Bay Borough    AK      942
+## 38 02282 Yakutat City and Borough    AK      646
+## 39 15005           Kalawao County    HI       91</code></pre>
+<p>The very high correlation between LEB &amp; AAMR suggests that we may be able to impute these values with modeled AAMR estimates based on the at least roughly contemporary 2010 LEB estimates from the <a href="http://www.healthdata.org/us-health/data-download">Institute for Health Metrics and Evaluation</a> (<a href="https://web.archive.org/web/20190423102357/http://www.healthdata.org/us-health/data-download">archive</a>).</p>
+<p>First, let’s visualize the appropriateness of various simple models based on on the RWJF data.</p>
+<pre class="r"><code>na.omit(rwjf) %&gt;% 
+  ggplot(aes(x = leb, y = aamr)) + 
+  geom_point(size = 2, alpha = 0.1) + 
+  geom_smooth(
+    method = &quot;loess&quot;,
+    aes(color = &quot;LOESS&quot;, fill = &quot;LOESS&quot;),
+    size = 1.2
+  ) + 
+  geom_smooth(
+    method = &quot;lm&quot;,
+    aes(color = &quot;Linear&quot;, fill = &quot;Linear&quot;),
+    size = 1.2
+  ) + 
+  geom_smooth(
+    method = &quot;lm&quot;,
+    formula = y ~ splines::bs(x, degree = 2),
+    aes(color = &quot;Quadratic&quot;, fill = &quot;Quadratic&quot;),
+    size = 1.2
+  ) +
+  scale_color_manual(values = c(&quot;orange2&quot;, &quot;steelblue2&quot;, &quot;seagreen3&quot;),
+                     name = &quot;Model&quot;) +
+  scale_fill_manual(values = c(&quot;orange2&quot;, &quot;steelblue2&quot;, &quot;seagreen3&quot;),
+                    name = &quot;Model&quot;) +
+  theme_minimal()</code></pre>
+<p><img src="/post/2019-06-20-constructing-a-dataset-modified-hdi-covariates-from-census-bls-data_files/figure-html/mort%20model%20plot-1.png" width="672" /></p>
+<p>All models closely align at the dense center of the data, but the the quadratic model performs much better at the extremes relative to the LOESS fit than does the linear model. Therefore, I believe that we should model AAMR as a quadratic function of LEB to impute the missing counties’ values.</p>
+<p>Let’s go ahead and run the regression.</p>
+<pre class="r"><code>rwjf$lebsq &lt;- rwjf$leb^2
+
+mort_model &lt;- lm(aamr ~ leb + lebsq, data = na.omit(rwjf))
+
+summary(mort_model)
+## 
+## Call:
+## lm(formula = aamr ~ leb + lebsq, data = na.omit(rwjf))
+## 
+## Residuals:
+##     Min      1Q  Median      3Q     Max 
+## -214.31  -15.47   -2.05   12.67  223.28 
+## 
+## Coefficients:
+##               Estimate Std. Error t value Pr(&gt;|t|)    
+## (Intercept) 10772.3622   164.2617   65.58   &lt;2e-16 ***
+## leb          -231.5823     4.2272  -54.78   &lt;2e-16 ***
+## lebsq           1.2599     0.0272   46.32   &lt;2e-16 ***
+## ---
+## Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1
+## 
+## Residual standard error: 27.39 on 3058 degrees of freedom
+## Multiple R-squared:  0.9408, Adjusted R-squared:  0.9408 
+## F-statistic: 2.432e+04 on 2 and 3058 DF,  p-value: &lt; 2.2e-16</code></pre>
+<p>Very strong fit &amp; small standard errors, as we would expect from the plot. I feel quite comfortable about using this model for imputation.</p>
+<p>Next, let’s import the IHME 2010 Life Expectancy estimates. They are in an Excel sheet, so we’ll need <code>readxl</code>. And since <code>readxl</code> can’t read directly from a URL, we need download the workbook as a temp file first. The estimates separate male and female life expectancy, so based on the approximate 50-50 sex split in most areas, we’ll take a simple unweighted average to get a single estimate.</p>
+<pre class="r"><code>library(readxl)
+
+tempxl &lt;- tempfile(fileext = &quot;.xlsx&quot;)
+dataURL &lt;- &quot;https://www.dropbox.com/s/18tjlmaxzr54x9e/IHME_county_data_LifeExpectancy_Obesity_PhysicalActivity_NATIONAL.xlsx?dl=1&quot;
+download.file(dataURL, destfile = tempxl, mode = &quot;wb&quot;)
+
+ihme &lt;- 
+  read_excel(tempxl, sheet = &quot;Life Expectancy&quot;) %&gt;% 
+  filter(!is.na(County)) %&gt;% 
+  select(c(1:2, 13:14)) %&gt;% 
+  `colnames&lt;-`(c(&quot;state&quot;, &quot;county&quot;, &quot;male2010&quot;, &quot;female2010&quot;)) %&gt;% 
+  mutate(leb = (male2010 + female2010) / 2) %&gt;% 
+  select(state, county, leb)
+
+sample_n(ihme, 10)
+## # A tibble: 10 x 3
+##    state          county          leb
+##    &lt;chr&gt;          &lt;chr&gt;         &lt;dbl&gt;
+##  1 Texas          Lipscomb       75.4
+##  2 Georgia        Clayton        76.2
+##  3 Kentucky       Muhlenberg     74.4
+##  4 Mississippi    Neshoba        73.1
+##  5 Minnesota      Lac qui Parle  79.9
+##  6 Tennessee      Henderson      74.8
+##  7 Indiana        Clinton        77.1
+##  8 Kansas         Seward         76.8
+##  9 California     San Joaquin    78.2
+## 10 South Carolina McCormick      76.8</code></pre>
+<p>The IMHE data frustratingly don’t include FIPS codes. We’ll try to get them by joining by county names extracted from our main <code>cnty</code> dataset. However, the IHME county names also lack the words “County,” “Parish,” etc., so we’ll also strip those from the extract from <code>cnty</code>. Then we’ll see if we can correct any remaining mismatches</p>
+<pre class="r"><code>csub &lt;- as.data.frame(cnty) %&gt;% 
+  select(fips, county, state_name) %&gt;% 
+  mutate(
+    county = str_remove(county, &quot; County&quot;),
+    county = str_remove(county, &quot; Parish&quot;),
+    county = str_remove(county, &quot; Borough&quot;),
+    county = str_remove(county, &quot; Census Area&quot;),
+    county = str_remove(county, &quot; Municipality&quot;),
+    county = str_replace(county, &quot;city&quot;, &quot;City&quot;)
+  ) %&gt;% 
+  rename(state = state_name)
+
+anti_join(ihme, csub)
+## Joining, by = c(&quot;state&quot;, &quot;county&quot;)
+## # A tibble: 11 x 3
+##    state        county                                          leb
+##    &lt;chr&gt;        &lt;chr&gt;                                         &lt;dbl&gt;
+##  1 Alaska       Wade Hampton                                   77.9
+##  2 Illinois     La Salle                                       77.4
+##  3 Iowa         OBrien                                         79.0
+##  4 Maryland     Prince Georges                                 77.3
+##  5 Maryland     Queen Annes                                    79.7
+##  6 Maryland     St. Marys                                      78.3
+##  7 Missouri     St. Genevieve                                  78.1
+##  8 Montana      Gallatin County and Yellowstone National Park  80.4
+##  9 South Dakota Shannon                                        73.6
+## 10 Virginia     Bedford City                                   78.1
+## 11 Virginia     Halifax County with South Boston City          75.2</code></pre>
+<p>We already know that Wade Hampton, AK and Shannon, SD are the former names of Kusilvak, AK and Oglala Lakota, SD. Most of the others appear to be typos (e.g. OBrien &amp; Annes instead of O’Brien &amp; Anne’s), or additional descriptions (e.g. …and Yellowstone… rather than just Gallatin). <a href="https://en.wikipedia.org/wiki/LaSalle_County,_Illinois">LaSalle, IL</a> is spelt without a space. Finally, <a href="https://en.wikipedia.org/wiki/Bedford,_Virginia">Bedford City, VA</a> reverted from independent city status to town status &amp; rejoined surrounding Bedford County in 2013. We’ll have to manually correct all of these &amp; make sure we got everything:</p>
+<pre class="r"><code>ihme$county[ihme$state == &quot;South Dakota&quot; &amp; ihme$county == &quot;Shannon&quot;] &lt;- &quot;Oglala Lakota&quot;
+ihme$county[ihme$county == &quot;Wade Hampton&quot;] &lt;- &quot;Kusilvak&quot;
+ihme$county[ihme$state == &quot;Illinois&quot; &amp; ihme$county == &quot;La Salle&quot;] &lt;- &quot;LaSalle&quot;
+ihme$county[ihme$county == &quot;Prince Georges&quot;] &lt;- &quot;Prince George&#39;s&quot;
+ihme$county[ihme$county == &quot;Queen Annes&quot;] &lt;- &quot;Queen Anne&#39;s&quot;
+ihme$county[ihme$county == &quot;St. Marys&quot;] &lt;- &quot;St. Mary&#39;s&quot;
+ihme$county[ihme$county == &quot;OBrien&quot;] &lt;- &quot;O&#39;Brien&quot;
+ihme$county[ihme$county == &quot;St. Genevieve&quot;] &lt;- &quot;Ste. Genevieve&quot;
+ihme$county[ihme$county == &quot;Gallatin County and Yellowstone National Park&quot;] &lt;- &quot;Gallatin&quot;
+ihme$county[ihme$county == &quot;Halifax County with South Boston City&quot;] &lt;- &quot;Halifax&quot;
+ihme &lt;- filter(ihme, county != &quot;Bedford City&quot;)
+
+setdiff(ihme$county, csub$county)
+## character(0)</code></pre>
+<p>Now we can join in FIPS codes the the IHME data and join those that match to the <code>mort_missing</code> data frame.</p>
+<pre class="r"><code>ihme &lt;- ihme %&gt;% left_join(csub) %&gt;% select(fips, leb)
+## Joining, by = c(&quot;state&quot;, &quot;county&quot;)
+
+mort_missing &lt;- mort_missing %&gt;% left_join(ihme) %&gt;% select(fips, leb)
+## Joining, by = &quot;fips&quot;</code></pre>
+<p>Now we’ll add a LEB<sup>2</sup> variable to <code>mort_missing</code> &amp; use that data to generate AAMR predictions from the quadratic model we ran above. We’ll bind those imputed figures to our main AAMR data data from the CDC and check to make sure everything matches <code>cnty</code>.</p>
+<pre class="r"><code># generate squared LEB for prediction
+mort_missing$lebsq &lt;- mort_missing$leb^2
+
+# predict &amp; attach predictions
+mort_missing$aamr &lt;- predict(mort_model, newdata = mort_missing)
+
+# get just the 
+mort_missing &lt;- mort_missing %&gt;% select(fips, aamr)
+
+# drop the missing rows from the main dataframe, then add the imputations back
+mort &lt;- na.omit(mort)
+mort &lt;- mort %&gt;% bind_rows(mort_missing)
+
+# check to make sure we have an AAMR value for each county
+setdiff(cnty$fips, mort$fips)
+## character(0)</code></pre>
+<p>Now we have a complete set of AAMR estimates, including the 39 imputed values. However, remember that age-adjusted mortality is <em>negatively</em> correlated with life expectancy. Death is generally negatively correlated with life, after all! So AAMR represents a “<strong>less</strong> is better” measure. HDI — and thus its sub-indices — is a more is better measure. So we’ll take the reciprocal of AAMR &amp; scale it up to get a more manageable range without a bunch of scientific notation.</p>
+<pre class="r"><code>mort$raamr &lt;- 100000 / mort$aamr
+
+range(mort$raamr)
+## [1]  47.14757 446.82752</code></pre>
+<p>And finally join to <code>cnty</code>.</p>
+<pre class="r"><code>cnty &lt;- left_join(cnty, mort)
+## Joining, by = &quot;fips&quot;</code></pre>
+</div>
+<div id="create-index" class="section level4">
+<h4>Create Index</h4>
+<p>Since we’re using age-adjusted mortality as a substitute/proxy for life expectancy, we can’t use Measure of America’s goalposts directly and will need to construct our own. Following from the MoA methodology, we want to set the goalposts such that the max-min normalized index has a median close-ish to 5. We also need a non-zero minimum since we’ll ultimately be using a geometric mean &amp; don’t want to multiply by zero. Let’s start with some quantiles to help guide us.</p>
+<pre class="r"><code>quantile(cnty$raamr, probs = seq(0, 1, 0.1)) %&gt;% round()
+##   0%  10%  20%  30%  40%  50%  60%  70%  80%  90% 100% 
+##   47   97  105  112  118  124  130  137  146  162  447
+
+quantile(cnty$raamr, probs = seq(0.9, 1, 0.01)) %&gt;% round()
+##  90%  91%  92%  93%  94%  95%  96%  97%  98%  99% 100% 
+##  162  164  167  170  174  178  185  195  215  267  447
+
+quantile(cnty$raamr, probs = seq(0.99, 1, 0.0025)) %&gt;% round()
+##    99% 99.25%  99.5% 99.75%   100% 
+##    267    281    302    316    447</code></pre>
+<p>There seem to be quite a few extreme upper outliers, indicating a pretty hefty left skew, which we’ll confirm with a quick, ugly density plot.</p>
+<pre class="r"><code>density(cnty$raamr) %&gt;% plot()</code></pre>
+<p><img src="/post/2019-06-20-constructing-a-dataset-modified-hdi-covariates-from-census-bls-data_files/figure-html/mort%20density-1.png" width="672" /></p>
+<p>Yep! So let’s log-transform the reciprocal age-adjusted mortality rates, which is quite the mouthful, and check the quantiles and density plot on that.</p>
+<pre class="r"><code>cnty$lraamr &lt;- log(cnty$raamr)
+
+quantile(cnty$lraamr, seq(0, 1, 0.1)) %&gt;% round(2)
+##   0%  10%  20%  30%  40%  50%  60%  70%  80%  90% 100% 
+## 3.85 4.58 4.66 4.72 4.77 4.82 4.87 4.92 4.98 5.09 6.10
+
+density(cnty$lraamr) %&gt;% plot()</code></pre>
+<p><img src="/post/2019-06-20-constructing-a-dataset-modified-hdi-covariates-from-census-bls-data_files/figure-html/mort%20log-1.png" width="672" /></p>
+<p>Much better. Let’s set our goalposts a little outside the max &amp; min &amp; <strong><em>FINALLY</em></strong> construct the actual index.</p>
+<pre class="r"><code>healthmin &lt;- 3.5
+healthmax &lt;- 6.25
+
+cnty &lt;- cnty %&gt;% 
+  mutate(
+    health_index = (lraamr - healthmin) / (healthmax - healthmin) * 10
+  )
+
+summary(cnty$health_index)
+##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##   1.285   4.324   4.800   4.840   5.268   9.462</code></pre>
+<p>These goalposts achieve a median slightly below our target of 5. Let’s roll with it &amp; move on.</p>
+</div>
+</div>
+<div id="education-index" class="section level3">
+<h3>Education Index</h3>
+<div id="enrollment-index" class="section level4">
+<h4>Enrollment Index</h4>
+<p>Here, we can follow the MoA methodology quite closely. First, we construct a gross enrollment ratio (GER) for the prime school ages of 3 to 24 from GER<sub><em>i</em></sub> = enrolled<sub><em>i</em></sub> / pop_324<sub><em>i</em></sub>. This is a little bit of a blunt instrument, because the enrollment variable is for the population <em>3 and <strong>over</strong></em>, not 3 to 24. But without microdata for every single county, these are the best public-use figures available. As in the MoA methodology, we’ll topcode GER at 1, since over-age enrollment (like yours truly!) can push some counties above 100%.</p>
+<pre class="r"><code>cnty &lt;- cnty %&gt;% 
+  mutate(
+    ger =
+      if_else(
+        enrolled / pop_324 &lt; 1,
+        enrolled / pop_324,
+        1
+      )
+  )
+
+
+quantile(cnty$ger, probs = seq(0, 1, 0.1)) %&gt;% round(3)
+##    0%   10%   20%   30%   40%   50%   60%   70%   80%   90%  100% 
+## 0.451 0.758 0.784 0.801 0.816 0.830 0.845 0.860 0.879 0.908 1.000
+quantile(cnty$ger, probs = seq(0, .1, 0.01)) %&gt;% round(3)
+##    0%    1%    2%    3%    4%    5%    6%    7%    8%    9%   10% 
+## 0.451 0.659 0.692 0.708 0.721 0.731 0.738 0.744 0.749 0.753 0.758
+quantile(cnty$ger, probs = seq(0, .01, 0.0025)) %&gt;% round(3)
+##    0% 0.25%  0.5% 0.75%    1% 
+## 0.451 0.601 0.628 0.648 0.659
+
+
+density(cnty$ger) %&gt;% plot()</code></pre>
+<p><img src="/post/2019-06-20-constructing-a-dataset-modified-hdi-covariates-from-census-bls-data_files/figure-html/enrollment%20check-1.png" width="672" /></p>
+<p>The MoA minimum goalpost is 0.6, and we can see we have a few counties in the bottom 0.25% that fall below that threshold. The goalposts were set using state-level aggregates, which wouldn’t necessarily be all that responsive to a few lower outliers. The density plot looks pretty symmetric (with the right tail truncated because of the topcoding). We’ll try bottom-coding just barely above the MoA goalpost at .601 so we don’t get any index values below 0.</p>
+<pre class="r"><code>cnty &lt;- cnty %&gt;% 
+  mutate(
+    ger =
+      if_else(
+        enrolled / pop_324 &gt; .601 &amp; enrolled / pop_324 &lt; 1,
+        enrolled / pop_324,
+        if_else(
+          enrolled / pop_324 &lt; .601,
+          .601,
+          1
+        )
+      )
+  )
+
+
+enrollmin &lt;- .6
+enrollmax &lt;- .95
+
+cnty &lt;- cnty %&gt;% 
+  mutate(
+    enroll_index = (ger - enrollmin) / (enrollmax - enrollmin) * 10
+  )
+
+summary(cnty$enroll_index)
+##     Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+##  0.02857  5.50275  6.57702  6.58480  7.72257 11.42857</code></pre>
+<p>We won’t concern ourselves with the median and range just yet. What matters more is the overall Education Index, and Enrollment is weighted less than Attainment in the composite index.</p>
+</div>
+<div id="attainment-index" class="section level4">
+<h4>Attainment Index</h4>
+<p>Here we’ll replicate MoA methodology and goalposts exactly.</p>
+<pre class="r"><code>attainmin &lt;- .5
+attainmax &lt;- 2
+
+cnty &lt;- cnty %&gt;% 
+  mutate(
+    hs_prop = (hsetc + bacc + grad) / pop_25plus,
+    bacc_prop = (bacc + grad) / pop_25plus,
+    grad_prop = grad / pop_25plus,
+    attain_score = hs_prop + bacc_prop + grad_prop,
+    attain_index = (attain_score - attainmin) / (attainmax - attainmin) * 10
+  )
+
+
+summary(cnty$attain_index)
+##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##  0.7048  3.4440  4.1272  4.2552  4.8458 11.3979</code></pre>
+</div>
+<div id="composite-education-index" class="section level4">
+<h4>Composite Education Index</h4>
+<p>And finally, we’ll construct the Education Index weighted average of the two sub-indices.</p>
+<pre class="r"><code>cnty &lt;- cnty %&gt;% 
+  mutate(educ_index = (1/3)*enroll_index + (2/3)*attain_index)
+
+summary(cnty$educ_index)
+##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##  0.8444  4.2069  4.9000  5.0317  5.6899 11.4082</code></pre>
+<p>We achieve a median close to our target of 5. We likely have a bit of right skew, with a min near 1 and a max over 11, but we’re not going to lose any sleep over it.</p>
+</div>
+</div>
+<div id="income-index" class="section level3">
+<h3>Income Index</h3>
+<p>Here, we’ll use the MoA methodology, constructing a scaled index of log median personal earnings. But let’s first investigate the distribution.</p>
+<pre class="r"><code>summary(cnty$medearn)
+##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##    5223   25133   27270   28174   30799   65122
+
+quantile(cnty$medearn, seq(0,.01,.0025)) %&gt;% round()
+##    0% 0.25%  0.5% 0.75%    1% 
+##  5223 13557 16309 16738 17334</code></pre>
+<p>The MoA 2016 lower goalpost was $16,009, inflation adjusted from their initial 2005 goalpost. Once again, that figure was based on state-level aggregate ACS data, and we have a few lower outlier counties in the bottom 0.5%. Here, we’ll bottom-code at the 0.25th percentile of $13,557 and move the lower goalpost to a little below that at $12,000. We’ll leave the upper goalpost at the MoA’s $67,730.</p>
+<pre class="r"><code>earnmin &lt;- 12000
+earnmax &lt;- 67730
+
+cnty &lt;- cnty %&gt;% 
+  mutate(
+    medearn_bc =
+      if_else(
+        medearn &gt; quantile(medearn, .0025),
+        medearn,
+        quantile(medearn, .0025)
+      ),
+    inc_index = 
+      (log(medearn_bc) - log(earnmin)) / (log(earnmax) - log(earnmin)) * 10
+  )
+
+summary(cnty$inc_index)
+##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##   0.705   4.272   4.743   4.839   5.446   9.773</code></pre>
+</div>
+<div id="composite-hd-index" class="section level3">
+<h3>Composite HD Index</h3>
+<p>Now that we have our three sub-indices, we can construct our overall Modified HDI from their geometric mean. But first, let’s take a look at their individual distributions. Remember, we’re looking for roughly balanced distributions with medians in the neighborhood of 5.</p>
+<p>Boxplots:</p>
+<pre class="r"><code>hdicomps &lt;- as.data.frame(cnty) %&gt;% 
+  select(fips, health_index, educ_index, inc_index) %&gt;% 
+  gather(health_index, educ_index, inc_index, key = &quot;component&quot;, value = &quot;value&quot;) %&gt;% 
+  group_by(fips)
+
+
+hdicomps %&gt;% ggplot() +
+  geom_boxplot(
+    aes(x = component,
+        y = value,
+        color = component,
+        fill = component),
+    alpha = 0.3,
+    outlier.alpha = 0.3
+  ) +
+  coord_flip() +
+  scale_color_manual(
+    values = c(&quot;orange2&quot;, &quot;steelblue2&quot;, &quot;seagreen3&quot;),
+    labels = c(&quot;Education&quot;, &quot;Health&quot;, &quot;Income&quot;),
+    name = &quot;Component: &quot;
+  ) +
+  scale_fill_manual(
+    values = c(&quot;orange2&quot;, &quot;steelblue2&quot;, &quot;seagreen3&quot;),
+    labels = c(&quot;Education&quot;, &quot;Health&quot;, &quot;Income&quot;),
+    name = &quot;Component: &quot;
+  ) +
+  scale_y_continuous(breaks = seq(0,11,1)) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    axis.ticks.x = element_line(color = &quot;grey90&quot;),
+    axis.line.x.bottom = element_line(color = &quot;grey90&quot;),
+    legend.position = &quot;bottom&quot;
+  )</code></pre>
+<p><img src="/post/2019-06-20-constructing-a-dataset-modified-hdi-covariates-from-census-bls-data_files/figure-html/component%20boxplots-1.png" width="672" /></p>
+<p>This looks pretty good to me. It closely follows the visualization on <a href="https://mk0moaorgidkh7gsb4pe.kinstacdn.com/wp-content/uploads/2009/05/measureofamerica_methodology.pdf">page 210 of the original report’s methodology section</a> (<a href="https://web.archive.org/web/20190616184126/https://mk0moaorgidkh7gsb4pe.kinstacdn.com/wp-content/uploads/2009/05/measureofamerica_methodology.pdf">archive</a>). There are some outliers above 10 on the Education Index, but that’s OK since they probably represent advances beyond the goalposts set in 2005 (which, remember, appear to have been set from state-level aggregates).</p>
+<p>So now, at long last, we’ll construct our Modified HDI:</p>
+<pre class="r"><code>cnty &lt;- cnty %&gt;% 
+  mutate(mhdi = (health_index * educ_index * inc_index)^(1/3))
+
+summary(cnty$mhdi)
+##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##   2.093   4.319   4.793   4.855   5.312   8.761</code></pre>
+<p>And lastly, a distribution visualiztion. This is a favorite of mine, with a density area plot and a boxplot as a rug. I plan to cover this viz in detail in a separate (shorter!) post.</p>
+<pre class="r"><code># get stats to use in boxplot
+hdibp &lt;- boxplot(cnty$mhdi, plot = F)
+
+ggplot() +
+  # reference normal distribution density line plot
+  stat_density(
+    geom = &quot;line&quot;,
+    aes(x = rnorm(3142,
+                  mean = mean(cnty$mhdi),
+                  sd = sd(cnty$mhdi)),
+        color = &quot;Simulated Normal&quot;
+    ),
+    size = 1
+  ) +
+  # observed density line plot
+    stat_density(
+    geom = &quot;line&quot;,
+    aes(
+      x = cnty$mhdi,
+      color = &quot;mHDI&quot;
+    ),
+    size = 1
+  ) +
+  # fill observed density
+  geom_density(
+    data = cnty,
+    aes(x = mhdi),
+    fill = &quot;orange2&quot;,
+    color = NA,
+    alpha = 0.3
+  ) +
+  # legend
+  scale_color_manual(values = c(&quot;orange2&quot;, &quot;seagreen3&quot;), name = &quot;&quot;) +
+  # botplot central box
+  annotate(
+    &quot;rect&quot;,
+    xmin = hdibp$stats[2], xmax = hdibp$stats[4],
+    ymin = -.06, ymax = -.02,
+    fill = &quot;orange2&quot;,
+    color = &quot;orange2&quot;,
+    alpha = 0.3,
+  ) +
+  # boxplot median line
+  geom_segment(
+    data = cnty,
+    x = hdibp$stats[3], xend = hdibp$stats[3],
+    y = -.06, yend = -.02,
+    color = &quot;orange2&quot;,
+  ) +
+  # boxplot left whisker
+  geom_segment(
+    data = cnty,
+    x = hdibp$stats[1], xend = hdibp$stats[2],
+    y = -.04, yend = -.04,
+    color = &quot;orange2&quot;,
+  ) +
+  # boxplot right whisker
+  geom_segment(
+    data = cnty,
+    x = hdibp$stats[4], xend = hdibp$stats[5],
+    y = -.04, yend = -.04,
+    color = &quot;orange2&quot;,
+  ) +
+  # boxplot outliers
+  geom_point(
+    data = NULL,
+    aes(x = hdibp$out, y = -0.0398),
+    color = &quot;orange2&quot;,
+    alpha = 0.3
+  ) +
+  # x-axis scale
+  scale_x_continuous(breaks = seq(2,9,1), limits = c(1.75,9.25)) +
+  # theme stuff
+  labs(x = &quot;Modified HDI&quot;, y = &quot;&quot;) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    legend.position = &quot;bottom&quot;
+  )</code></pre>
+<p><img src="/post/2019-06-20-constructing-a-dataset-modified-hdi-covariates-from-census-bls-data_files/figure-html/hdi%20viz-1.png" width="672" /></p>
+<p>A bit right-skewed, which is probably to be expected.</p>
+</div>
+</div>
