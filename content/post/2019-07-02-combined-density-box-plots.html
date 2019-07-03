@@ -1,0 +1,349 @@
+---
+title: Combined Density/Box Plots
+author: David E. Lambert
+date: '2019-07-02'
+slug: combined-density-box-plots
+categories:
+  - R
+tags:
+  - R
+  - Visualization
+image:
+  caption: ''
+  focal_point: ''
+---
+
+
+
+<p><em>Note: This post is also available as a functional RMarkdown notebook via GitHub
+at <a href="https://github.com/magickcicada/personal_site/tree/master/content/post/2019-07-02-combined-density-box-plots.Rmd">https://github.com/magickcicada/personal_site/tree/master/content/post/2019-07-02-combined-density-box-plots.Rmd</a></em></p>
+<p>I often find myself visualizing variable distributions in different ways for different reasons. One combination that comes up fairly often for me is to look at a continuous variable both in a density plot and in a box plot. A density plot provides a great overview and can easily reveal distribution characteristics like skew, extreme kurtosis, or multimodalism, some of which might not be easily visible in a box plot — or in a histogram with too few bins to capture small variations. Meanwhile, a box plot can reveal the presence and extent of extreme values (for a given definition of “extreme”) and key quantiles, characteristics that are not necessarily visible in a density plot.</p>
+<p>Since I found myself looking at both density and box plots for a given variable fairly often, I began using ggplot to combine them, as in the final plot at the bottom of this <a href="http://https://davidelambert.com/post/constructing-a-dataset-modified-hdi-covariates-from-census-bls-data/">Modified HDI construction post</a>. The following walks through the construction of the combined density/box plot, with modifications and speed improvements from the code in that post. I’ve also combined all of this code into an <a href="https://github.com/magickcicada/dbox">R package on GitHub</a> (v0.0.3 as of this writing).</p>
+<div id="background" class="section level2">
+<h2>Background</h2>
+<p>Ggplot is awesome. We love ggplot. Let’s load it, and <em>only</em> it, because I have a tendency to use other functions from <a href="https://www.tidyverse.org/">tidyverse</a> packages without thinking about it. (The restriction isn’t really necessary, but when doing initial development on the <a href="https://github.com/magickcicada/dbox">dbox package</a>, I was going for only one non-core dependency.)</p>
+<pre class="r"><code>library(ggplot2)</code></pre>
+<p>Let’s also randomly generate a distribution to experiment with. I’d like something that’s not quite a normal distribution and will almost surely include several outliers, a few of theme extreme. A log-normal distribution should fit the bill, giving us a right-skewed distribution. Instead of the usual base <em>e</em>, we’ll use base 1.36 (roughly half of <em>e</em>) for a somewhat less skew.</p>
+<pre class="r"><code>lognorm &lt;- 1.36^rnorm(1000)</code></pre>
+<p>As awesome as ggplot is, some of it’s idiosyncracies make it difficult to combine density and box plots out-of-the-box. Chiefly, the orientations of <code>geom_density()</code> and <code>geom_boxplot()</code> don’t match:</p>
+<pre class="r"><code>ggplot() + geom_density(aes(x = lognorm))</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/geom-mismatch-1.png" width="672" /></p>
+<pre class="r"><code>ggplot() + geom_boxplot(aes(y = lognorm))</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/geom-mismatch-2.png" width="672" /></p>
+<p>For the two plots to be directly comparable, we need the same value — the value of the variable we’re looking at — on the same axis at the same scale. While ggplot provides <code>coord_flip()</code> to rotate plots, it can’t be applied to individual layers, only to the entire plot. And neither of the base geoms have internal options for orientation — supplying a <code>y</code> aesthetic to <code>geom_density()</code> or <code>x</code> to <code>geom_boxplot()</code> throws an error. So we’ll need an alternative.</p>
+<p>Now is also a good time to bring up a couple of other personal preference issues I have with the geom defaults that I’ll alter when constructing the combined plot. First, I’m not fond of the way <code>geom_density()</code> draws a border all the way around the plot — connecting the endpoints to the baseline. This is can be changed within ggplot by using <code>stat_density(geom = "line")</code>, but the same orientation issue applies. Second, the density of outliers a box plot can sometimes be difficult to discern because they are all plotted in the same plane as the whiskers. I prefer to plot the outliers separately and apply a jitter so their density is more visible, especially right near the “fences” at the ends of the whiskers.</p>
+</div>
+<div id="horizontal-density-plot" class="section level2">
+<h2>Horizontal Density Plot</h2>
+<p>The simplest and fastest way I know of to get around the orientation mismatch issue is to plot the density “horizontally”, that is, where y = the value of variable <strong><em>X</em></strong> and x = it’s density. This is easier and faster than drawing all elements of the box plot horizontally.</p>
+<p>To get the horizontal density plot, we’ll generate a data frame from <code>stats::density()</code>, using the default gaussian kernel, and the default N of 512 which I find gives a nice smooth set of points while being small enough to plot quite quickly. I’ll use the right-skewed distribution we generated above as <strong><em>X</em></strong>. (<code>na.omit()</code> is not strictly necessary here since we generated <code>lognorm</code> and know there are no missing values. But it’s good practice since missings cause errors in many plots.)</p>
+<pre class="r"><code>X &lt;- na.omit(lognorm)
+
+dens &lt;- density(X)
+ddf &lt;- data.frame(
+  X = dens$x,
+  density = dens$y
+)</code></pre>
+<p>Now we can plot the output of <code>density()</code> “horizontally” as described. We’ll use <code>geom_path()</code> to get only a line and avoid the connected polygon of <code>geom_density()</code> that I don’t particularly like. We’ll also supply <code>color</code> and <code>linetype</code> arguments to <code>aes()</code>, which will force them into the legend. (We’ll create scales to control the actual values of color &amp; linetype later).</p>
+<pre class="r"><code>d &lt;- geom_path(
+  data = ddf,
+  aes(x = density, y = X, color = &quot;X&quot;, linetype = &quot;X&quot;),
+  size = 1.1
+)
+
+ggplot() + d</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/density%20line%20plot-1.png" width="672" /></p>
+<p>We can also add a fill using <code>geom_polygon()</code>. (Getting the matching fill color’s hex value from ggplot defaults is from <a href="https://stackoverflow.com/questions/25211078/what-are-the-default-plotting-colors-in-r-or-ggplot2/25211125">this StackOverflow post</a>.) We’ll plot the fill first in the additive ggplot chain, so that it’s on a lower layer. This won’t matter if using the same color, as we are. But if you use a different colored fill, you would want the opaque outline plotted on top of the translucent fill to avoid transpency interaction.</p>
+<pre class="r"><code>df &lt;- geom_polygon(
+  data = ddf,
+  aes(x = density, y = X),
+  fill = &quot;#F8766D&quot;,
+  color = NA,
+  alpha = 0.2
+)
+
+ggplot() + df + d</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/density%20fill-1.png" width="672" /></p>
+</div>
+<div id="add-box-plot" class="section level2">
+<h2>Add Box Plot</h2>
+<p>Now that we have a horizontal density plot, we can add the box plot and use <code>coord_flip()</code> to get the orientation into a form where <strong><em>X</em></strong> is on the x-axis. We’ll use <code>stat_boxplot()</code> instead of <code>geom_boxplot()</code> to allow us to tweak the location of the fences, and thus definition of outliers, via the <code>coef</code> argument. We’ll define a 1-element <code>fence_coef</code> vector here, starting with the box plot default of 1.5, so we can change it as desired and use it to define our outliers separately.</p>
+<p>We also need to make a couple of other tweaks to the box plot defaults:</p>
+<ul>
+<li>As we saw above, the default box plot is centered on x = 0 (y after <code>coord_flip()</code>), with a width (height) of ± 0.4. We want the boxplot to appear as a rug below the density plot, so we need to move the centerline and reduce the width (height). However, since the absolute max density will change depending on a given variable’s distribution, we need to position the box plot <em>relative</em> to <strong><em>X</em></strong>.
+<ul>
+<li>We’ll use <code>position_nudge()</code> to move the centerline left of (<em>below</em> after <code>coord_flip()</code>) 0 by 15% of the total width (height) of the density plot.</li>
+<li>We’ll alter the width (height) to 20% of the width (height) of the density plot. This is ± 10% from the centerline, leaving a gap of 5% between the left (bottom) of the density plot and the right (top) boundary of the box.</li>
+</ul></li>
+<li>We’ll omit the outliers with <code>outlier_shape = NA</code> so that we can plot them separately and jitter them around the centerline, as discussed above.</li>
+<li>We’ll leave the box unfilled, so we can plot the fill separately, and thus optionally, just like the density plot.</li>
+</ul>
+<p>All together, that comes to:</p>
+<pre class="r"><code>fence_coef &lt;- 1.5
+
+b &lt;- stat_boxplot(
+  data = NULL,
+  aes(y = X),
+  coef = fence_coef,
+  fill = NA,
+  color = &quot;#F8766D&quot;,
+  outlier.shape = NA,
+  width = .2 * max(ddf$density),
+  position = position_nudge(x = -0.15 * max(ddf$density))
+)
+
+ggplot() + df + d + b + coord_flip()</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/boxplot-1.png" width="672" /></p>
+<p>We can add the fill with an arbitrarily positioned rectangle via <code>annotate()</code>. We’ll get the y-coordinates (again, x-coordinates after <code>coord_flip</code>), which are the 1st and 3rd quartiles of <strong><em>X</em></strong>, from <code>quantiles</code>. The x- (y-) coordinates are the location of box plot centerline ± 10% of the width (height) of the density plot. For the same reasons as the density plot fill, we’ll want to plot the box plot fill before the box plot itself to get it on a lower layer.</p>
+<pre class="r"><code>bf &lt;- annotate(
+  geom = &quot;rect&quot;,
+  xmin = -.05 * max(ddf$density),
+  xmax = -.25 * max(ddf$density),
+  ymin = quantile(X, 0.25),
+  ymax = quantile(X, 0.75),
+  color = NA,
+  fill = &quot;#F8766D&quot;,
+  alpha = 0.2,
+)
+
+ggplot() + df + d + bf + b + coord_flip()</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/boxplot%20fill-1.png" width="672" /></p>
+</div>
+<div id="outliers" class="section level2">
+<h2>Outliers</h2>
+<p>Now we need to define our outliers. We need to get the fence coefficient, which we defined above at the standard of 1.5. We also need the inter-quartile range of <strong><em>X</em></strong>, which we can get from <code>stats::IQR()</code>. We can use these two values, as well as the values of 1st and 3rd quartiles, to subset the outliers of <strong><em>X</em></strong>.</p>
+<pre class="r"><code>iqr &lt;- IQR(X)
+outliers &lt;- X[X &lt; (quantile(X, 0.25) - fence_coef * iqr) |
+              X &gt; (quantile(X, 0.75) + fence_coef * iqr)]</code></pre>
+<p>Now we can plot the outliers using <code>geom_point()</code> and applying <code>position_jitter()</code>. We’ll jitter to 3/4 of the height of the box, or 7.5% of the height of the density plot. Note that it’s possible a distribution won’t have any outliers. When adding the outlier layer to the plot, we’ll wrap it in an <code>if</code> expression so that the layer only appears if there are, in fact, outliers.</p>
+<pre class="r"><code>o &lt;-  geom_point(
+  aes(y = outliers, x = -0.15 * max(ddf$density)),
+  color = &quot;#F8766D&quot;,
+  alpha = 0.2,
+  position = position_jitter(width = .075 * max(ddf$density))
+)
+
+ggplot() + df + d + bf + b + {if (length(outliers) &gt; 0) o} + coord_flip()</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/plot%20outliers-1.png" width="672" /></p>
+<p>This allows us to more clearly visualize the density of outliers just outside the upper fence when compared to the basic box plot, where the outliers are all plotted along the centerline.</p>
+<pre class="r"><code>ggplot() + geom_boxplot(aes(y = X)) + coord_flip()</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/outlier%20comparison-1.png" width="672" /></p>
+</div>
+<div id="theming" class="section level2">
+<h2>Theming</h2>
+<p>We now have our combined density/box plot in pretty good shape, with each plot sharing a scale and providing their unique insights into the distribution. A few theme tweaks can make the plot more visually effective, IMHO.</p>
+<ul>
+<li>Combine the color &amp; linetype scales in the legend using the same (blank) <code>name</code> argument. Unless these aesthetics convey different information, they should be combined to avoid repetition &amp; clutter. In our case, the linetype aesthetic isn’t necessary, but I’ve included it to add further differentiation if we choose to include a normal density comparison plot, as we’ll do below. The simple legend should be self-explanatory, so we don’t need to add clutter with a legend title, hence the blank <code>name</code> argument.</li>
+<li>Switch to <code>theme_minimal()</code> for a starting point. I think the grey background in the default <code>theme_grey()</code> doesn’t add anything meaningful to the plot, and in some cases can distract from meaningful color in plots.</li>
+<li>Remove the y-axis title, scale, and grid. On it’s own, the absolute density of <strong><em>X</em></strong> doesn’t convey much useful meaning to the viewer, and the y-position of the boxplot doesn’t convey any meaning at all. We primarily care about the <em>relative</em> density of the distribution over the domain of <strong><em>X</em></strong>. So we can declutter by removing the y-axis scale labels and gridlines. Without those elements, the axis title isn’t very meaningful either, so we can remove it, too.</li>
+<li>Move legend to the bottom. Our pupose is to visualize the distribution of <strong><em>X</em></strong>, and we are displaying its scale in the horizontal dimension. So the greater the available space in the horizontal dimension, the greater the detail we can see in <strong><em>X</em></strong>. Moving the legend to the bottom of the plot gives us a more detailed visualization across the domain of <strong><em>X</em></strong> (as does removing the y-axis scale &amp; title).</li>
+<li>Remove the x-axis title. We know what <strong><em>X</em></strong> is from the legend, so we don’t need to add clutter by repeating it just above the legend.</li>
+<li>Optionally, remove the x-axis minor grid. This will depend on the domain of <strong><em>X</em></strong>, the meaningfulness of particular scale values , the automatic scale if you’re using it (as we are) and some degree of personal taste. The goal is, as ever, to minimize clutter. This is kind of a borderline case, as far as I’m concerned, and I’m opting to exclude the minor gridlines here.</li>
+</ul>
+<pre class="r"><code># scales, combined by blank name argument.
+sc &lt;- scale_color_manual(name = &quot;&quot;, values = &quot;#F8766D&quot;)
+sl &lt;- scale_linetype_manual(name = &quot;&quot;, values = &quot;solid&quot;)
+
+# theme elements
+t &lt;- theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    legend.position = &quot;bottom&quot;
+  )
+
+ggplot() + df + d + bf + b + {if (length(outliers) &gt; 0) o} + 
+  sc + sl + t + coord_flip()</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/theme-1.png" width="672" /></p>
+<p>This yields a nice, minimal, uncluttered plot, showing the overall shape of the distribution of <strong><em>X</em></strong>, its median, 1st, and 3rd quartiles, and an uncluttered view of extent and density of extreme values in the right tail. This is just what I want to see from a combined density/box plot.</p>
+</div>
+<div id="optional-normal-comparison-plot" class="section level2">
+<h2>Optional Normal Comparison Plot</h2>
+<p>Sometimes, it’s helpful to compare a variable’s density plot to a normal distribution with the same mean and standard deviation, for instance to see whether a transformation would be appropriate for linear modelling. We can add a normal density comparison plot in the same way we created the base density plot</p>
+<p>First, we’ll generate a data frame. We’ll use <code>seq()</code> to get 512 equally spaced values, centered at the mean of <strong><em>X</em></strong>, and spaced over ± 3.1 standard deviations of <strong><em>X</em></strong>. Then we’ll supply those values and the parameters of <strong><em>X</em></strong> to <code>dnorm()</code> to get normally-distributed density values, and combine these vetors into a small data frame.</p>
+<pre class="r"><code>norm_x &lt;- seq(-3.1, 3.1, length.out = 512) * sd(X) + mean(X)
+norm_y &lt;- dnorm(norm_x, mean(X), sd(X))
+ndf &lt;- data.frame(
+  x = norm_x,
+  density = norm_y
+)</code></pre>
+<p>Now we can create a layer plotting this idealized normal distribution and add it to our ggplot chain. We’ll also need to tweak the color and linetype scales to accomodate this new line. In doing so, we’ll want to be specific about what layer gets what scale value, rather than relying on ggplot’s automatic assignment. Otherwise, the color of the <strong><em>X</em></strong> density plot might not always match that of the box plot.</p>
+<pre class="r"><code>n &lt;- geom_path(
+  data = ndf,
+  aes(x = density, y = x,
+      color = &quot;Comparison Normal Distribution&quot;,
+      linetype = &quot;Comparison Normal Distribution&quot;),
+  size = 1.1
+)
+
+sc &lt;- scale_color_manual(
+  name = &quot;&quot;,
+  values = c(&quot;X&quot; = &quot;#F8766D&quot;,
+             &quot;Comparison Normal Distribution&quot; = &quot;#00BA38&quot;)
+
+)
+
+sl &lt;- scale_linetype_manual(
+  name = &quot;&quot;,
+  values = c(&quot;X&quot; = &quot;solid&quot;,
+             &quot;Comparison Normal Distribution&quot; = &quot;twodash&quot;)
+
+)
+
+ggplot() + df + d + bf + b + {if (length(outliers) &gt; 0) o} + 
+  n + sc + sl + t + coord_flip()</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/normal%20density%20plot%20&%20scales-1.png" width="672" /></p>
+</div>
+<div id="putting-it-all-together" class="section level2">
+<h2>Putting It All Together</h2>
+<p>If it wasn’t already obvious, adding the idealized normal distribution density curve makes the right-skew of <strong><em>X</em></strong> quite apparent. As a review/overview of the plot construction, let’s log-transform <strong><em>X</em></strong>, which we specifically generated to be log-normally distributed, and repeat each step.</p>
+<pre class="r"><code># log transform X
+logX &lt;- log(X)
+
+# density data frame
+dens &lt;- density(logX)
+ddf &lt;- data.frame(
+  logX = dens$x,
+  density = dens$y
+)
+
+# density line plot
+d &lt;- geom_path(
+  data = ddf,
+  aes(x = density, y = logX, color = &quot;log(X)&quot;, linetype = &quot;log(X)&quot;),
+  size = 1.1
+)
+
+# density fill
+df &lt;- geom_polygon(
+  data = ddf,
+  aes(x = density, y = logX),
+  fill = &quot;#F8766D&quot;,
+  color = NA,
+  alpha = 0.2
+)
+
+# define fence coefficient, using the standard 1.5
+fence_coef &lt;- 1.5
+
+# box plot
+b &lt;- stat_boxplot(
+  data = NULL,
+  aes(y = logX),
+  coef = fence_coef,
+  fill = NA,
+  color = &quot;#F8766D&quot;,
+  outlier.shape = NA,
+  width = .2 * max(ddf$density),
+  position = position_nudge(x = -0.15 * max(ddf$density))
+)
+
+# box plot fill
+bf &lt;- annotate(
+  geom = &quot;rect&quot;,
+  xmin = -.05 * max(ddf$density),
+  xmax = -.25 * max(ddf$density),
+  ymin = quantile(logX, 0.25),
+  ymax = quantile(logX, 0.75),
+  color = NA,
+  fill = &quot;#F8766D&quot;,
+  alpha = 0.2,
+)
+
+# define outliers
+iqr &lt;- IQR(logX)
+outliers &lt;- logX[logX &lt; (quantile(logX, 0.25) - fence_coef * iqr) |
+                 logX &gt; (quantile(logX, 0.75) + fence_coef * iqr)]
+
+# outliers plot
+o &lt;-  geom_point(
+  aes(y = outliers, x = -0.15 * max(ddf$density)),
+  color = &quot;#F8766D&quot;,
+  alpha = 0.2,
+  position = position_jitter(width = .075 * max(ddf$density))
+)
+
+# comparison normal distribution
+norm_x &lt;- seq(-3.1, 3.1, length.out = 512) * sd(logX) + mean(logX)
+norm_y &lt;- dnorm(norm_x, mean(logX), sd(logX))
+ndf &lt;- data.frame(
+  logX = norm_x,
+  density = norm_y
+)
+
+# comparison normal density plot
+n &lt;- geom_path(
+  data = ndf,
+  aes(x = density, y = logX,
+      color = &quot;Comparison Normal Distribution&quot;,
+      linetype = &quot;Comparison Normal Distribution&quot;),
+  size = 1.1
+)
+
+
+# color scale
+sc &lt;- scale_color_manual(
+  name = &quot;&quot;,
+  values = c(&quot;log(X)&quot; = &quot;#F8766D&quot;,
+             &quot;Comparison Normal Distribution&quot; = &quot;#00BA38&quot;)
+
+)
+
+# linetype scale
+sl &lt;- scale_linetype_manual(
+  name = &quot;&quot;,
+  values = c(&quot;log(X)&quot; = &quot;solid&quot;,
+             &quot;Comparison Normal Distribution&quot; = &quot;twodash&quot;)
+
+)
+
+# theme
+t &lt;- theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    legend.position = &quot;bottom&quot;
+  )
+
+# PLOT!
+ggplot() + df + d + bf + b + {if (length(outliers) &gt; 0) o} + 
+  n + sc + sl + t + coord_flip()</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/all%20together-1.png" width="672" /></p>
+<p>As expected, log-transforming <strong><em>X</em></strong> yields a distribution that matches up well with an idealized normal distribution.</p>
+</div>
+<div id="function" class="section level2">
+<h2>Function</h2>
+<p>As I mentioned above, I’ve combined all the the above into a <a href="https://github.com/magickcicada/dbox">little R package</a> called <code>dbox</code>, for “<strong>D</strong> ensity/<strong>Box</strong> Plot.” As of this writing, it’s in an alpha stage at v0.0.3. Right now, it takes arguments for:</p>
+<ul>
+<li>colors, linetypes, line weights, and fill alpha</li>
+<li>options to display fills and the comparison normal plot</li>
+<li>fence coefficient for the box plot/outliers</li>
+<li>optional weighting for <strong><em>X</em></strong></li>
+<li>the label for <strong><em>X</em></strong> in the legend</li>
+</ul>
+<p>Here’s an example:</p>
+<pre class="r"><code>library(dbox)
+
+data(&quot;iris&quot;)
+
+dbox(iris$Petal.Length[iris$Species == &quot;setosa&quot;],
+     coef = 1.1,
+     label = &quot;Setosa Petal Length&quot;,
+     color = &quot;orange2&quot;,
+     lwt = 0.8,
+     ltype = &quot;longdash&quot;,
+     alpha = 0.3,
+     fill = TRUE,
+     normal = TRUE,
+     color_norm = &quot;steelblue2&quot;,
+     lwt_norm = 1.2,
+     ltype_norm = &quot;dotted&quot;
+     )</code></pre>
+<p><img src="/post/2019-07-02-combined-density-box-plots_files/figure-html/dbox%20example-1.png" width="672" /></p>
+</div>
