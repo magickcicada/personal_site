@@ -21,11 +21,6 @@ googleAnalytics = "UA-144431560-1"
 # Enable comments by entering your Disqus shortname
 disqusShortname = ""
 
-[privacy.googleAnalytics]
-    anonymizeIP = true
-    disable = false
-    respectDoNotTrack = true
-    useSessionStorage = false
 
 ############################
 ## Advanced options below ##
