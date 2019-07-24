@@ -5,3 +5,17 @@ body {
 article {
   background-color: #EDEBE9;
 }
+
+code {
+  color: #000000;
+  background-color: #EDEBE9;
+}
+
+table {
+  font-size: 1rem;
+}
+
+img[src*="#smallmargin"] {
+   margin-top: 0.5rem;
+   margin-bottom: 0.1rem;
+}

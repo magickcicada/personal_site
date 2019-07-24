@@ -1,0 +1,518 @@
+---
+title: Bivariate Choropleths in Leaflet for R
+author: David E. Lambert
+date: '2019-07-20'
+slug: bivarite-choropleths-in-leaflet-for-r
+categories:
+  - R
+  - Visualization
+tags:
+  - R
+  - Visualization
+image:
+  caption: ''
+  focal_point: ''
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE, collapse = TRUE)
+```
+
+A few months back, [Timo Grossenbacher's excellent post](https://timogrossenbacher.ch/2019/04/bivariate-maps-with-ggplot2-and-sf/) about creating bivariate choropleths using ggplot2 made the rounds in #rstats Twitter and elsewhere. That post, as well as his colleague [Angelo Zehr's article](https://www.srf.ch/news/schweiz/interaktive-karte-so-ungleich-ist-das-einkommen-in-der-schweiz-verteilt) with an interactive version, inspired me to create an interactive bivariate choropleth using [RStudio's frontend](https://rstudio.github.io/leaflet/) for [Leaflet.js](https://leafletjs.com/).
+
+``` {r top, echo=FALSE}
+suppressPackageStartupMessages({
+  library(tidycensus)
+  library(dplyr)
+  library(magrittr)
+  library(sf)
+  library(ggplot2)
+  library(grid)
+  library(cowplot)
+  library(leaflet)
+  library(leaflet.extras)
+  library(leafem)
+  library(htmlwidgets)
+  library(htmltools)
+})
+
+load("alameda_income.Rdata")
+
+# from Census API pull described but not evaluated below
+hhinc_metro <- 92714
+
+# get values for lower & upper "Pew breaks"
+hhinc_lower <- ((2/3) * hhinc_metro)
+hhinc_upper <- (2 * hhinc_metro)
+
+# binned palette using Pew breaks & full-color univariate scale hex values
+pal_hhinc <- colorBin(
+  palette = c("#EDEDED", "#FF94C0", "#FF2C54"),
+  domain = alameda$hhinc,
+  bins = c(0, hhinc_lower, hhinc_upper, max(alameda$hhinc, na.rm = T))
+)
+
+
+# also from Census API not evaluated
+pearn_metro <- 46477
+# personal earnings Pew breaks
+pearn_lower <- ((2/3) * pearn_metro)
+pearn_upper <- (2 * pearn_metro)
+
+# palette using same colors as hh income
+pal_pearn <- colorBin(
+  palette = c("#EDEDED", "#FF94C0", "#FF2C54"),
+  domain = alameda$pearn,
+  bins = c(0, pearn_lower, pearn_upper,  max(alameda$pearn, na.rm = T))
+)
+
+# gini scale, using breaks at terciles (1/3-quantiles)
+pal_gini <- colorQuantile(
+  palette = c("#EDEDED", "#94C6E7", "#4CB1DF"),
+  domain = alameda$gini,
+  probs = seq(0, 1, length.out = 4)
+)
+
+#create labels
+nogeog <- st_drop_geometry(alameda)
+labs <- lapply(seq(nrow(nogeog)), function(i) {
+  paste0(
+    "Median Household Income: $", 
+    prettyNum(nogeog[i, "hhinc"], big.mark = ","), "<br>",
+    "Median Presonal Earnings: $", 
+    prettyNum(nogeog[i, "pearn"], big.mark = ","), "<br>",
+    "Gini Coefficient: ", round(nogeog[i, "gini"], 3)
+  ) 
+})
+
+img <- "https://davidelambert.com/img/alameda_income_legend.svg"
+
+alameda %>% 
+  leaflet(
+    width = "100%",
+    options = leafletOptions(zoomSnap = 0.25, zoomDelta = 0.5)
+  ) %>% 
+  addProviderTiles("Stamen.TonerLite") %>% 
+  # HH Income Layer
+  addPolygons(
+    group = "Household Income",
+    fillColor = ~pal_hhinc(hhinc),
+    fillOpacity = 0.5,
+    stroke = FALSE,
+    smoothFactor = 0
+  ) %>% 
+  # Personal Earnings Layer
+  addPolygons(
+    group = "Personal Earnings",
+    fillColor = ~pal_pearn(pearn),
+    fillOpacity = 0.5,
+    stroke = FALSE,
+    smoothFactor = 0
+  ) %>% 
+  # Gini Layer
+  addPolygons(
+    group = "Gini Coefficient",
+    fillColor = ~pal_gini(gini),
+    fillOpacity = 0.5,
+    stroke = FALSE,
+    smoothFactor = 0
+  ) %>% 
+  # income measure switching
+  addLayersControl(
+    baseGroups = c("Household Income", "Personal Earnings"),
+    options = layersControlOptions(collapsed = FALSE),
+    position = "topright"
+  ) %>% 
+  # forces income measure layer to bottom on switch
+  htmlwidgets::onRender("
+    function(el, x) {
+      this.on('baselayerchange', function(e) {
+        e.layer.bringToBack();
+      })
+    }
+  ") %>% 
+  addPolygons(
+    label = lapply(labs, htmltools::HTML),
+    labelOptions = labelOptions(textsize = "12px"),
+    fillColor = NA,
+    fillOpacity = 0,
+    color = "black",
+    weight = 1,
+    opacity = 1,
+    highlightOptions = highlightOptions(weight = 2)
+  ) %>% 
+  addResetMapButton() %>% 
+  addFullscreenControl() %>% 
+  suspendScroll(sleepNote = F, sleepOpacity = 1) %>% 
+  addLogo(
+    img,
+    url = "https://davidelambert.com/img/",
+    position = "topright",
+    width = 140,
+    height = 140,
+    offset.x = 10,
+    offset.y = 64
+  )
+  
+
+```
+
+This example explores the same relationship between income and income inequality as in Grossenbacher's and Zehr's work, but slightly reformats the analysis for an American context. First, we'll look at the relationship of inequality to two different common measures if income in the US: median household income and median personal earnings. Second, we'll use use different definitions of low, middle, and high income. Rather than terciles (1/3-quantiles, 33.3% each), we'll use the [Pew Research Center's definition of the middle class](https://www.pewsocialtrends.org/2016/05/11/americas-shrinking-middle-class-a-close-look-at-changes-within-metropolitan-areas/), ranging from 67% -  200% of the median income.
+
+As an example, we'll map Census Tracts in [Alameda County, California](https://en.wikipedia.org/wiki/Alameda_County,_California). Alameda County is socioeconomically diverse and exhibits a wide range of income/inequality relationships across its 136 Census Tracts.
+
+## Import Packages
+
+```{r import, eval=FALSE}
+suppressPackageStartupMessages({
+  library(tidycensus)
+  library(dplyr)
+  library(magrittr)
+  library(sf)
+  library(ggplot2)
+  library(grid)
+  library(cowplot)
+  library(leaflet)
+  library(leaflet.extras)
+  library(leafem)
+  library(htmlwidgets)
+  library(htmltools)
+})
+```
+
+
+
+
+## Collect Data & Geography
+
+We can use Kyle Walker's `tidycensus` package ([GitHub](https://github.com/walkerke/tidycensus) | [CRAN](https://cran.r-project.org/web/packages/tidycensus/index.html)) to gather tract-level summary statistics from the 2017 American Community Survey 5-Year Estimates (covering 2013-2017). `tidycensus` is especially handy because we can get the relevant geographic data, polygons in this case, at the same time and return an `sf`-class data frame. After a little manipulation of columns and names, we'll also want to tweak the map projection to Leaflet's default WGS84 datum, 
+
+
+```{r data pull, results='hide', message=FALSE, eval=FALSE}
+# Named vector of ACS tables to get from Census API
+varlist <- c("hhinc" = "B19013_001",
+             "pearn" = "B20002_001",
+             "gini" = "B19083_001")
+
+# tract-level summary data from Census API
+alameda <- get_acs(
+  geography = "tract",
+  state = "CA",
+  county = "Alameda",
+  variables = varlist,
+  survey = "acs5",
+  year = 2017,
+  output = "wide",
+  geometry = TRUE
+)
+
+# drop margins of error
+alameda <- alameda[, c(1, 2, seq(3, 9, by = 2))]
+
+# lowercasse names with no "E" suffix
+colnames(alameda) <- c("GEOID", "name", names(varlist), "geometry")
+
+# re-project to play nice with leaflet
+alameda <- st_transform(alameda, 4326, type = "datum")
+
+# probably a good idea to save the object in case the API goes down.
+save(alameda, file = "alameda_income.Rdata")
+```
+
+
+
+
+
+## Bivariate Color Scale
+
+Constructing a bivariate color scale that's (comparitively) easy for the viewer to understand and interpret can be a challenge. [Joshua Stevens's 2015 post](http://www.joshuastevens.net/cartography/make-a-bivariate-choropleth-map/), as well as [Grossenbacher's post](https://timogrossenbacher.ch/2019/04/bivariate-maps-with-ggplot2-and-sf/) speak to some of the challenges. Luckily, Stevens includes several options, and Christopher Prener has developed the `biscale` package ([GitHub](https://github.com/slu-openGIS/biscale) | [CRAN](https://cloud.r-project.org/web/packages/biscale/index.html)) to generate bivariate color scales and ggplot legends.
+
+Unfortunately, for our purposes, none of these options are a sure bet. To orient ourselves when zooming in, we'll want to see street names and so forth on the base map. So we'll want transparency in our bivariate color scale, which will require transparency in each of the underlying univariate scales. Ultimately, we'll need full-color values for each cell in the bivariate scale, plus the values for each cell when the opacity is reduced. We'll also want to preview the full-color scale and the reduced-opacity scale simulataneously to make sure he resulting values are sensible.
+
+To that end, I created basic bivariate scale templates in Illustrator and Inkscape, which are downloadable below. Using Symbols in Illustrator, or Clones in Inkscape, we can tweak each univariate scale independently and automatically view the resulting full-color and reduced-opacity bivariate scales. We can then eyedropper the various cells to get the hex-color values we'll need for the steps below. For our example, we'll use the scales already in the templates.
+
+| [![Illustrator Template](/img/bivariate_scale_illustrator.png#smallmargin)](https://www.dropbox.com/s/uj0jgsem23cwdbz/bivariate_palette.ai?dl=1)<br>[Illustrator Template](https://www.dropbox.com/s/uj0jgsem23cwdbz/bivariate_palette.ai?dl=1) | [![Inkscape Template](/img/bivariate_scale_inkscape.png#smallmargin)](https://www.dropbox.com/s/6a0vcgq47ctl53g/bivariate_palette.svg?dl=1)<br>[Inkscape Template](https://www.dropbox.com/s/6a0vcgq47ctl53g/bivariate_palette.svg?dl=1) |
+  | --- | --- |
+
+
+## Scale Breaks & Palettes
+
+After building a bivariate scale using one of the above templates, we can define numerical breaks for each of our income variables and our Gini coefficient, and map each bin to a color value.
+
+As mentioned above, we're going to use the [Pew Research Center's definition of the middle class](https://www.pewsocialtrends.org/2016/05/11/americas-shrinking-middle-class-a-close-look-at-changes-within-metropolitan-areas/) to define the income variable breaks, which we'll call "Pew breaks." The first Pew break, between low income and middle income, falls at 67% of _overall_ median income, while the second Pew break falls at 200% of overall median income. To define "overall," we'll again use `tidycensus` to get median income values for the entire [San Francisco-Oakland-Hayward Metropolitan Statistical Area](https://en.wikipedia.org/wiki/San_Francisco%E2%80%93Oakland%E2%80%93Berkeley,_CA_Metropolitan_Statistical_Area), which includes Alameda County, San Francisco, and surrounding counties in the immediate commuting zone. I believe that calculating Pew breaks from the _metro_ area medians will give us better regional context for income than would the Alameda County medians alone.
+
+We'll start with household income. We'll get the metro area median from the Census API and calculate the Pew breaks. We can then use the breaks to define a palette using R-Leaflet's `colorBin()` function. For our colors, we'll want to eyedropper the hex-value from the _red univariate scale_ in our template. Then we'll do the same for median personal earnings, also using the template's red univriate scale for palette values.
+
+```{r income palettes, message=FALSE, eval=FALSE}
+# get median hh income for SF-Oakland-Hayward MSA as baseline for breaks
+# returns 92714 - retain in case API is down
+hhinc_metro <- get_acs(
+  geography = "metropolitan statistical area/micropolitan statistical area",
+  variables = c("hhinc" = "B19013_001"),
+  survey = "acs5",
+  year = 2017
+) %>% 
+  filter(GEOID == "41860") %>% 
+  select(estimate) %>% 
+  pull()
+
+# get values for lower & upper "Pew breaks"
+hhinc_lower <- ((2/3) * hhinc_metro)
+hhinc_upper <- (2 * hhinc_metro)
+
+# binned palette using Pew breaks & full-color univariate scale hex values
+pal_hhinc <- colorBin(
+  palette = c("#EDEDED", "#FF94C0", "#FF2C54"),
+  domain = alameda$hhinc,
+  bins = c(0, hhinc_lower, hhinc_upper, max(alameda$hhinc, na.rm = T))
+)
+
+# get median personal earnings for metro
+# returns 46477
+pearn_metro <- get_acs(
+  geography = "metropolitan statistical area/micropolitan statistical area",
+  variables = c("pearn" = "B20002_001"),
+  survey = "acs5",
+  year = 2017
+) %>% 
+  filter(GEOID == "41860") %>% 
+  select(estimate) %>% 
+  pull()
+
+# personal earnings Pew breaks
+pearn_lower <- ((2/3) * pearn_metro)
+pearn_upper <- (2 * pearn_metro)
+
+# palette using same colors as hh income
+pal_pearn <- colorBin(
+  palette = c("#EDEDED", "#FF94C0", "#FF2C54"),
+  domain = alameda$pearn,
+  bins = c(0, pearn_lower, pearn_upper,  max(alameda$pearn, na.rm = T))
+)
+```
+
+
+For the Gini coefficient palette, we'll use `colorQuantile()` instead of `colorBin()` and define the breaks at terciles (1/3-quantiles), just as in Grosenbacher's post. Here, we'll get the color hex values from our template's univariate _blue_ color scale.
+
+```{r gini palette, eval=FALSE}
+# gini scale, using breaks at terciles (1/3-quantiles)
+pal_gini <- colorQuantile(
+  palette = c("#EDEDED", "#94C6E7", "#4CB1DF"),
+  domain = alameda$gini,
+  probs = seq(0, 1, length.out = 4)
+)
+```
+
+
+
+
+
+
+## Basic Leaflet Plot
+
+We can now use these palettes to make our basic bivariate choropleth, plotting plotting each at 50% opacity. We'll want to use a basemap that uses white as a base color to get the smae values as our template, so we'll use the Stamen.TonerLite provider tiles (I'm personally not a fan of the black water bodies in the regular Stamen.Toner tiles). If using a different set of tiles, we'd want to add square with the basic land color underneath the 50% opacity portion of our Illustrator/Inkscape template so we could know how the blending will come out.
+
+One note: following [this advice from Joe Chen](https://github.com/rstudio/leaflet/issues/430#issuecomment-304429145), we need to add the `onRender()` code at the end of the pipeline so that whichever income layer we select (red scale) will always be below the Gini coefficient layer (blue scale). Otherwise the blending would get messed up as the red income scales move above the blue Gini scales when switching income measures. 
+
+```{r basic plot}
+m <- alameda %>% 
+  leaflet(
+    width = "100%",
+    options = leafletOptions(zoomSnap = 0.25, zoomDelta = 0.5)
+  ) %>% 
+  addProviderTiles("Stamen.TonerLite") %>% 
+  # HH Income Layer
+  addPolygons(
+    group = "Household Income",
+    fillColor = ~pal_hhinc(hhinc),
+    fillOpacity = 0.5,
+    stroke = FALSE,
+    smoothFactor = 0
+  ) %>% 
+  # Personal Earnings Layer
+  addPolygons(
+    group = "Personal Earnings",
+    fillColor = ~pal_pearn(pearn),
+    fillOpacity = 0.5,
+    stroke = FALSE,
+    smoothFactor = 0
+  ) %>% 
+  # Gini Layer
+  addPolygons(
+    group = "Gini Coefficient",
+    fillColor = ~pal_gini(gini),
+    fillOpacity = 0.5,
+    stroke = FALSE,
+    smoothFactor = 0
+  ) %>% 
+  # income measure switching
+  addLayersControl(
+    baseGroups = c("Household Income", "Personal Earnings"),
+    options = layersControlOptions(collapsed = FALSE),
+    position = "topright"
+  ) %>% 
+  # forces income measure layer to bottom on switch
+  htmlwidgets::onRender("
+    function(el, x) {
+      this.on('baselayerchange', function(e) {
+        e.layer.bringToBack();
+      })
+    }
+  ")
+
+m
+```
+
+
+
+
+
+## Mouseover Labels & UI Enhancements
+
+While a good start, we can improve the useability & readability of our basic map with a few features on an additional polygon layer. First, we'll add mouseover labels that display the Houshold Income, Personal Income, and Gini Coefficient of each region for the viewer's reference. We'll also add a 1-pixel stroke to each tract so that we can differentiate between adjacent tracts with the same scale value. We'll add region highlighting by expanding the border to 2-pixels on mouseover. Finally, we'll add a few UI enhancements from `leaflet.extras`: a fullscreen button, a button to reset to the original zoom and center, and a slight control delay to prevent accidental zooming while scrolling.
+
+
+### Generate Labels
+
+Unlike Leaflet's popups functionality, _labels_ don't accept HTML by default, so we need to do a little massaging to get a multiline tooltip-style label. Popups are certainly an alternative option, but I perfer the more automatic-feeling mouseover functionality of a label to the click-open-and-close functionality of a popup, especially when looking at small geographies like census tracts. The method to get a multiline label can be found [here](https://stackoverflow.com/questions/43144596/r-and-leaflet-how-to-arrange-label-text-across-multiple-lines). The geographic data in our main `sf` data.frame messes with the function, so we need to drop the geometry first.
+
+```{r labels, eval=FALSE}
+nogeog <- st_drop_geometry(alameda)
+labs <- lapply(seq(nrow(nogeog)), function(i) {
+  paste0(
+    "Median Household Income: $", 
+    prettyNum(nogeog[i, "hhinc"], big.mark = ","), "<br>",
+    "Median Presonal Earnings: $", 
+    prettyNum(nogeog[i, "pearn"], big.mark = ","), "<br>",
+    "Gini Coefficient: ", round(nogeog[i, "gini"], 3)
+  ) 
+})
+```
+
+
+### Add Enchancements to Map
+
+Now we can add the labels, outlines, and outline highlting to our basic map with a new polygon layer. We'll also tack on the UI enchancements to end end of the pipeline.
+
+```{r add labels etc.}
+m %<>% 
+  addPolygons(
+    label = lapply(labs, htmltools::HTML),
+    labelOptions = labelOptions(textsize = "12px"),
+    fillColor = NA,
+    fillOpacity = 0,
+    color = "black",
+    weight = 1,
+    opacity = 1,
+    highlightOptions = highlightOptions(weight = 2)
+  ) %>% 
+  addResetMapButton() %>% 
+  addFullscreenControl() %>% 
+  suspendScroll(sleepNote = F, sleepOpacity = 1)
+
+m
+```
+
+
+
+
+
+## Legend
+
+Our basic functionality is now in pretty good shape, but we need a legend for interpretability. Leaflet's built-in legends can't handle a bivariate color scale, so we'll build our own with `ggplot2` and add it with `leafem::addLogo()` (formerly in the `mapview` package).
+
+We'll build our legend following Grosenbacher's methods with a few alterations. To match the map, we need to eyedropper the 50% opacity hex values from our template. We'll give each value basic Cartestian coordinates, where x = income and y = inequality. We'll then create our legend using `geom_tile()`. Importantly using a transparent background in the theme, for reasons we'll get to shortly.
+
+```{r legend, eval=FALSE}
+# data.frame of color values from 50% opacity region in template
+legend_scale <- data.frame(
+  income = c(rep(1, 3), rep(2, 3), rep(3, 3)),
+  inequality = c(rep(seq(1, 3, 1), 3)),
+  color = c("#F1F1F1", "#C3DEEE", "#A1D3EA",
+            "#F7DBE7", "#CAC8E3", "#A6BDDF",
+            "#F7C1CB", "#CAAEC8", "#A6A3C4")
+)
+
+# legend
+legend <- ggplot() + 
+  geom_tile(
+    data = legend_scale,
+    aes(x = income, y = inequality, fill = color)
+  ) + 
+  scale_fill_identity() +
+  labs(x = "Income →",
+       y = "Inequality →") +
+  theme(
+    axis.title = element_text(size = 18),
+    axis.line = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = margin(10, 10, 10, 10),
+    plot.background = element_rect(fill = "transparent", color = NA)
+  )
+```
+
+
+We'll want our legend to more or less match the existing zoom and layer control elements in our map. Perhaps the best method of doing so would be to replicate the CSS classes of those elements. But we can also get a close approximation by entirely within R. We can use `grid` to create a white rounded rectangle with a low-opacity black/grey stroke, and stack our legend on top using `cowplot`. Saving to SVG format will preserve stroke opacity, and `leafem::addLogo()` will add the legend and background to our plot.
+
+```{r DO NOT RUN ME, eval=FALSE}
+# background/outline
+bg <- roundrectGrob(
+  x = 0.5, y = 0.5, just = "centre", width = .97, height = .97,
+  r = unit(0.03, "snpc"),
+  gp = gpar(lwd = 3, fill = "white", col = rgb(0, 0, 0, 0.2))
+)
+
+
+# draw legend over background
+leg_plot <- ggdraw() + 
+  draw_grob(bg) +
+  draw_plot(legend)
+
+# save SVG legend
+ggsave("alameda_income_legend.svg", plot = leg_plot,
+       width = 3, height = 3, bg = "transparent")
+
+# add legend to leaflet
+img <- "https://davidelambert.com/img/alameda_income_legend.svg"
+m %<>%
+  addLogo(
+    img,
+    url = "https://davidelambert.com/img/",
+    position = "topright",
+    width = 140,
+    height = 140,
+    offset.x = 10,
+    offset.y = 64
+  )
+
+m
+
+m
+```
+
+
+
+
+```{r legend bg & map INVISIBLE, echo=FALSE}
+# add legend to map, using URL so it actually works
+img <- "https://davidelambert.com/img/alameda_income_legend.svg"
+m %<>%
+  addLogo(
+    img,
+    url = "https://davidelambert.com/img/",
+    position = "topright",
+    width = 140,
+    height = 140,
+    offset.x = 10,
+    offset.y = 64
+  )
+
+m
+```
+
+
+
