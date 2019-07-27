@@ -28,11 +28,8 @@ suppressPackageStartupMessages({
   library(magrittr)
   library(sf)
   library(ggplot2)
-  library(grid)
-  library(cowplot)
   library(leaflet)
   library(leaflet.extras)
-  library(leafem)
   library(htmlwidgets)
   library(htmltools)
 })
@@ -86,8 +83,7 @@ labs <- lapply(seq(nrow(nogeog)), function(i) {
   ) 
 })
 
-img <- "https://davidelambert.com/img/alameda_income_legend.svg"
-
+# plot the sucker
 alameda %>% 
   leaflet(
     width = "100%",
@@ -145,22 +141,51 @@ alameda %>%
   addResetMapButton() %>% 
   addFullscreenControl() %>% 
   suspendScroll(sleepNote = F, sleepOpacity = 1) %>% 
-  addLogo(
-    img,
-    url = "https://davidelambert.com/img/",
+  addControl(
+    "<img src = 'https://davidelambert.com/img/alameda_income_legend_2.svg' width = '128' height = '128'>",
     position = "topright",
-    width = 140,
-    height = 140,
-    offset.x = 10,
-    offset.y = 64
+    className = "legend-bivar"
   )
 ```
+<p class = "leaflet-caption">Source: American Community Survey 5-Year Estimates, 2017</p>
 
-This example explores the same relationship between income and income inequality as in Grossenbacher's and Zehr's work, but slightly reformats the analysis for an American context. First, we'll look at the relationship of inequality to two different common measures if income in the US: median household income and median personal earnings. Second, we'll use use different definitions of low, middle, and high income. Rather than terciles (1/3-quantiles, 33.3% each), we'll use the [Pew Research Center's definition of the middle class](https://www.pewsocialtrends.org/2016/05/11/americas-shrinking-middle-class-a-close-look-at-changes-within-metropolitan-areas/), ranging from 67% -  200% of the median income.
+This example explores the relationship between income and income inequality, just as in Grossenbacher's and Zehr's work, but slightly reformats the examination for an American context. First, we'll look at the relationship of inequality to two different common measures of income in the US: median household income and median personal earnings. Second, we'll use use different definitions of low, middle, and high income. Rather than terciles (1/3-quantiles, 33.3% each), we'll use the [Pew Research Center's definition of the middle class](https://www.pewsocialtrends.org/2016/05/11/americas-shrinking-middle-class-a-close-look-at-changes-within-metropolitan-areas/), ranging from 67% -  200% of the median income. As a mesaure of income inequality, we'll look at the [Gini coefficient](https://en.wikipedia.org/wiki/Gini_coefficient) for each tract, where 0 represents perfect income equality, and 1 represents a single household/person receiving all income (perfect inequality).
 
-As an example, we'll map census tracts in [Alameda County, California](https://en.wikipedia.org/wiki/Alameda_County,_California). Alameda County is socioeconomically diverse and exhibits a wide range of income/inequality relationships across its 361 census tracts.
+As an example, we'll map census tracts in [Alameda County, California](https://en.wikipedia.org/wiki/Alameda_County,_California). Alameda County is socioeconomically diverse and exhibits a wide range of income/inequality relationships across its 361 census tracts. Alameda County census tracts exhibited the following summary statistics over the 2013-2017 period:
+```{r table, echo=FALSE, message=FALSE, warning=FALSE}
+library(kableExtra)
+
+tabvars <- c("hhinc", "pearn", "gini")
+
+mins <- lapply(st_drop_geometry(alameda[, tabvars]), 
+               function(x) min(x, na.rm = TRUE))
+
+maxes <- lapply(st_drop_geometry(alameda[, tabvars]), 
+               function(x) max(x, na.rm = TRUE))
+
+means <- lapply(st_drop_geometry(alameda[, tabvars]), 
+               function(x) mean(x, na.rm = TRUE))
+
+tab <- bind_rows(mins, maxes, means) %>% 
+  as.data.frame() %>% 
+  mutate(
+    hhinc = paste0("$", prettyNum(round(hhinc, 0), big.mark = ",")),
+    pearn = paste0("$", prettyNum(round(pearn, 0), big.mark = ",")),
+    gini = round(gini, 3)
+  ) %>% 
+  `rownames<-`(c("Minimum", "Maximum", "Mean")) %>%
+  `colnames<-`(c("Median Household Income",
+                 "Median Personal Earnings",
+                 "Gini Coefficient"))
+
+knitr::kable(tab, align = rep("l", 3)) %>% 
+  column_spec(1, width = "25%", bold = TRUE)
+```
+<p class = "table-caption">Source: American Community Survey 5-Year Estimates, 2017</p>
 
 ## Import Packages
+
+We'll need several additonal packages to get our map fully operational but some that we'll use here are optional. Of the packages below, `tidycensus` is used for data gathering, `dplyr` and `magrittr` are used for preference in data wrangling, and `sf` may or may not be necessary depending on your data's geographic features. The others are strictly necessary.
 
 ```{r import, eval=FALSE}
 library(tidycensus)
@@ -168,11 +193,8 @@ library(dplyr)
 library(magrittr)
 library(sf)
 library(ggplot2)
-library(grid)
-library(cowplot)
 library(leaflet)
 library(leaflet.extras)
-library(leafem)
 library(htmlwidgets)
 library(htmltools)
 ```
@@ -182,7 +204,7 @@ library(htmltools)
 
 ## Collect Data & Geography
 
-We can use Kyle Walker's `tidycensus` package ([GitHub](https://github.com/walkerke/tidycensus) | [CRAN](https://cran.r-project.org/web/packages/tidycensus/index.html)) to gather tract-level summary statistics from the 2017 American Community Survey 5-Year Estimates (covering 2013-2017). `tidycensus` is especially handy because we can get the relevant geographic data, polygons in this case, at the same time and return an `sf`-class data frame. After a little manipulation of columns and names, we'll also want to tweak the map projection to Leaflet's default WGS84 datum (not strictly necessary, but it avoids an annoying warning message).
+We can use Kyle Walker's `tidycensus` package ([GitHub](https://github.com/walkerke/tidycensus) | [CRAN](https://cran.r-project.org/web/packages/tidycensus/index.html)) to gather tract-level summary statistics from the 2017 American Community Survey 5-Year Estimates (covering 2013-2017). `tidycensus` is especially handy because we can get geographic data at the same time and return an `sf`-class data frame. After a little manipulation of columns and names, we'll also want to tweak the map projection to Leaflet's default WGS84 datum (not strictly necessary, but it avoids an annoying warning message).
 
 
 ```{r data pull, results='hide', message=FALSE, eval=FALSE}
@@ -222,9 +244,9 @@ save(alameda, file = "alameda_income.Rdata")
 
 ## Bivariate Color Scale
 
-Constructing a bivariate color scale that's (comparatively) easy for the viewer to understand and interpret can be a challenge. [Joshua Stevens's 2015 post](http://www.joshuastevens.net/cartography/make-a-bivariate-choropleth-map/), as well as [Grossenbacher's post](https://timogrossenbacher.ch/2019/04/bivariate-maps-with-ggplot2-and-sf/) speak to some of the challenges. Luckily, Stevens includes several options, and Christopher Prener has developed the `biscale` package ([GitHub](https://github.com/slu-openGIS/biscale) | [CRAN](https://cloud.r-project.org/web/packages/biscale/index.html)) to generate bivariate color scales and ggplot legends.
+Constructing a bivariate color scale that's (comparatively) easy for the viewer to understand and interpret can be a challenge. See [Joshua Stevens's 2015 post](http://www.joshuastevens.net/cartography/make-a-bivariate-choropleth-map/), as well as [Grossenbacher's post](https://timogrossenbacher.ch/2019/04/bivariate-maps-with-ggplot2-and-sf/), for a rundown of the creating bivariate scales and some of the challenges invloved. Luckily, Stevens includes several options in his post, and Christopher Prener has developed the `biscale` package ([GitHub](https://github.com/slu-openGIS/biscale) | [CRAN](https://cloud.r-project.org/web/packages/biscale/index.html)) to generate bivariate color scales and ggplot legends.
 
-Unfortunately, for our purposes, we need to take a different route to get a tanslucent bivariate color scale. To orient ourselves when zooming in, we'll want to see street names and so forth on the base map. So we'll want transparency in our bivariate color scale, which will require transparency in each of two intersecting univariate scales, each of which is mapped to quantile bins of our income or inequality vairables. Ultimately, we'll need full-opacity color values for each cell in each univariate scale, plus the resulting values for each cell when the univariate scales are intersected with reduced opacity.
+For our purposes, we need to take a different approach. To orient ourselves when zooming in, we'll want to see street names and so forth on the base map. So we'll want transparency in our bivariate color scale, which will require transparency in each of two intersecting univariate scales, each of which is mapped to quantile bins of our income or inequality variables. Ultimately, we'll need full-opacity color values for each region in each univariate scale, plus the resulting values for each region when the univariate scales are intersected at reduced opacity.
 
 To that end, I created basic bivariate scale templates in Illustrator and Inkscape, which are downloadable below. Using Symbols in Illustrator, or Clones in Inkscape, we can tweak each univariate scale independently and automatically view the resulting full-color and reduced-opacity bivariate scales. We can then eyedropper the various cells to get the hex-color values we'll need for the steps below. These templates are available below and dedicated into the public domain under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). For our example, we'll use the pink/blue/purple scales already in these templates.
 
@@ -234,7 +256,7 @@ To that end, I created basic bivariate scale templates in Illustrator and Inksca
 
 ## Scale Breaks & Palettes
 
-Once we have our bivariate color scale, we need to map our income and inequality variables to each value. We'll bin our income variables into "Low," "Middle," and "High" categories and map these to the pink/red univariate scale from our template. Then we'll do the same for our Gini coefficient/inequality variable using the cyan/blue univariate scale. When we overlay these scales at 50% opacity using Leaflet, each census tract will get one of the 9 values from the bivariate scale.
+Once we have developed our bivariate color scale, we need to map our income and inequality variables to color values. To so so, we'll bin our income variables into "Low," "Middle," and "High" categories and map these to the pink/red univariate scale from our template. Then we'll do the same for our Gini coefficient/inequality variable using the cyan/blue univariate scale. When we overlay these scales at 50% opacity using Leaflet, each census tract will get one of the 9 values from the bivariate scale.
 
 As mentioned above, we're going to use the [Pew Research Center's definition of the middle class](https://www.pewsocialtrends.org/2016/05/11/americas-shrinking-middle-class-a-close-look-at-changes-within-metropolitan-areas/) to define the income variable breaks, which we'll call "Pew breaks." The first Pew break, between low and middle income, falls at 67% of _overall_ median income, while the second Pew break falls at 200% of overall median income. To define "overall," we'll again use `tidycensus` to get median income values for the entire [San Francisco-Oakland-Hayward Metropolitan Statistical Area](https://en.wikipedia.org/wiki/San_Francisco%E2%80%93Oakland%E2%80%93Berkeley,_CA_Metropolitan_Statistical_Area), which includes Alameda County, San Francisco, and surrounding counties in the immediate SF/Oakland commuting zone. I believe that calculating Pew breaks from the _metro_ area medians will give us better regional context for income than would the Alameda County medians alone.
 
@@ -289,7 +311,7 @@ pal_pearn <- colorBin(
 ```
 
 
-For the Gini coefficient palette, we'll use `colorQuantile()` instead of `colorBin()` and define the breaks at terciles (1/3-quantiles), just as in Grosenbacher's post. Here, we'll get the color hex values from the _blue_ univariate scale.
+For the Gini coefficient palette, we'll use `colorQuantile()` instead of `colorBin()` and define the breaks at terciles (1/3-quantiles), just as in Grossenbacher's post. Here, we'll get the color hex values from the _blue_ univariate scale.
 
 ```{r gini palette, eval=FALSE}
 # gini scale, using breaks at terciles (1/3-quantiles)
@@ -307,7 +329,7 @@ pal_gini <- colorQuantile(
 
 ## Basic Leaflet Plot
 
-We can now use these palettes to make our basic bivariate choropleth, plotting plotting each at 50% opacity. We'll want to use a basemap that uses white as a base color to get the smae values as our template, so we'll use the Stamen.TonerLite provider tiles (I'm personally not a fan of the black water bodies in the regular Stamen.Toner tiles). If using a different set of tiles, we'd want to add square with the basic land color underneath the 50% opacity portion of our Illustrator/Inkscape template so we could know how the blending will come out.
+We can now use these palettes to make our basic bivariate choropleth, making sure to fill each region at 50% opacity. We'll want to use a basemap that uses white as a base color to get the same values as our template, so we'll use the Stamen.TonerLite provider tiles (Stamen.Toner is also a good option, but I don't like the black water bodies). If using a different set of provider tiles, we'd want to add square with the basic land color underneath the 50% opacity portion of our Illustrator/Inkscape template so we would know how the blending will turn out.
 
 One note: following [this advice from Joe Chen](https://github.com/rstudio/leaflet/issues/430#issuecomment-304429145), we need to add the `onRender()` code at the end of the pipeline so that whichever income layer we select (red scale) will always be below the Gini coefficient layer (blue scale). Otherwise the blending would get messed up as the red income scales move above the blue Gini scales when switching income measures. 
 
@@ -359,6 +381,7 @@ m <- alameda %>%
 
 m
 ```
+<p class = "leaflet-caption">Source: American Community Survey 5-Year Estimates, 2017</p>
 
 
 
@@ -366,15 +389,18 @@ m
 
 ## Mouseover Labels & UI Enhancements
 
-While a good start, we can improve the useability & readability of our basic map with a few features on an additional polygon layer. First, we'll add mouseover labels that display the Houshold Income, Personal Income, and Gini Coefficient of each region for the viewer's reference. We'll also add a 1-pixel stroke to each tract boundary so that we can differentiate between adjacent tracts with the same scale value. We'll add tract highlighting by expanding the border to 2-pixels on mouseover. Finally, we'll add a few UI enhancements from `leaflet.extras`: a fullscreen button, a button to reset to the original zoom and center, and a slight control delay to prevent accidental zooming while scrolling (overriding the default fade and "click or hover to wake" behavior).
+While a good start, we can improve the usability & readability of our basic map with a few additional features. First, we'll add mouseover labels that display the Houshold Income, Personal Income, and Gini Coefficient of each region for the viewer's reference. We'll also add a 1-pixel stroke to each tract boundary so that we can differentiate between adjacent tracts with the same scale value. We'll add tract highlighting by expanding the border to 2-pixels on mouseover. Finally, we'll add a few user interface enhancements from `leaflet.extras`: a fullscreen button, a button to reset to the original zoom and center, and a slight control delay to prevent accidental zooming while scrolling (overriding the default fade and "click or hover to wake" behavior).
 
 
 ### Generate Labels
 
-Unlike Leaflet's popups functionality, _labels_ don't accept HTML by default, so we need to do a little massaging to get a multiline tooltip-style label. Popups are certainly an alternative option, but I perfer the more automatic-feeling mouseover behavior of a label to the click-open-and-close behavior of a popup, especially when looking at small geographies like census tracts. The method to get a multiline label can be found [here](https://stackoverflow.com/questions/43144596/r-and-leaflet-how-to-arrange-label-text-across-multiple-lines). The geographic data in our main data frame messes with the function, so we need to drop the geometry column first.
+Unlike Leaflet's popups functionality, _labels_ don't accept HTML by default, so we need to do a little massaging to get a multiline tooltip-style label. Popups are certainly an alternative option, but I perfer the more automatic-feeling mouseover behavior of a label to the click-open-and-close behavior of a popup, especially when looking at small geographies like census tracts. The method to get a multiline Leaflet label can be found [here](https://stackoverflow.com/questions/43144596/r-and-leaflet-how-to-arrange-label-text-across-multiple-lines). The geographic data in our main data frame messes with the function, so we need to drop the geometry column first.
 
 ```{r labels, eval=FALSE}
+# data frame with no geographic data
 nogeog <- st_drop_geometry(alameda)
+
+# list of HTML for each observation (census tract)
 labs <- lapply(seq(nrow(nogeog)), function(i) {
   paste0(
     "Median Household Income: $", 
@@ -389,7 +415,7 @@ labs <- lapply(seq(nrow(nogeog)), function(i) {
 
 ### Add Enchancements to Map
 
-Now we can add the labels, outlines, and outline highlting to our basic map with a new polygon layer. We'll also tack on the UI enchancements to end end of the pipeline.
+Now we can add the labels, outlines, and outline highlting to our basic map with a new polygon layer. We'll also tack on the `leaflet.extras` UI enchancements to the end of the pipeline.
 
 ```{r add labels etc.}
 m %<>% 
@@ -409,6 +435,7 @@ m %<>%
 
 m
 ```
+<p class = "leaflet-caption">Source: American Community Survey 5-Year Estimates, 2017</p>
 
 
 
@@ -416,9 +443,9 @@ m
 
 ## Legend
 
-Our basic functionality is now in pretty good shape, but we absolutely need a legend. Leaflet's built-in legends can't handle a bivariate color scale, so we'll build our own with `ggplot2` and add it with `leafem::addLogo()` (formerly in the `mapview` package).
+Our functionality is now in pretty good shape, but we absolutely need a legend. Leaflet's built-in legends can't handle a bivariate color scale, so we'll build our own with `ggplot2` and add it to the Leaflet pipeline as a pseudo-control via `addControl()`.
 
-We'll build our legend following Grosenbacher's methods with a few alterations. To match the values we see on the map, we need to eyedropper the 50% opacity hex values from our template. We'll give each value basic Cartestian coordinates, where x = income and y = inequality. We'll then create our legend using `geom_tile()`. Importantly using a transparent background in the ggplot theme, for reasons we'll get to shortly.
+We'll build our legend following Grossenbacher's methods with a few alterations. To match the values we see on the map, we need to eyedropper the 50% opacity hex values from our template. We'll give each value basic Cartestian coordinates, where x = income bin and y = inequality bin. We'll then create our legend using `geom_tile()`, making sure to use a transparent background in the ggplot theme for reasons we'll get to shortly. Finally, we'll want to save the legend as either SVG or PNG to support transparency.
 
 ```{r legend, eval=FALSE}
 # data.frame of color values from 50% opacity region in template
@@ -440,7 +467,7 @@ legend <- ggplot() +
   labs(x = "Income →",
        y = "Inequality →") +
   theme(
-    axis.title = element_text(size = 18),
+    axis.title = element_text(size = 20),
     axis.line = element_blank(),
     axis.text = element_blank(),
     axis.ticks = element_blank(),
@@ -449,68 +476,46 @@ legend <- ggplot() +
     plot.margin = margin(10, 10, 10, 10),
     plot.background = element_rect(fill = "transparent", color = NA)
   )
-```
-
-
-We'll want our legend to more or less follow the design of the existing zoom and layer control elements of our map. Perhaps the best method of doing so would be to replicate the CSS classes of those elements. But we can also get a close approximation entirely within R. We can use `grid` to create a white rounded rectangle with a low-opacity black/grey stroke, and stack our legend on top using `cowplot`. Saving to SVG format will preserve stroke opacity, and `leafem::addLogo()` will add the legend and background to our plot.
-
-With the legend added, we have our final interactive bivariate choropleth.
-
-```{r DO NOT RUN ME, eval=FALSE}
-# background/outline
-bg <- roundrectGrob(
-  x = 0.5, y = 0.5, just = "centre", width = .97, height = .97,
-  r = unit(0.03, "snpc"),
-  gp = gpar(lwd = 3, fill = "white", col = rgb(0, 0, 0, 0.2))
-)
-
-
-# draw legend over background
-leg_plot <- ggdraw() + 
-  draw_grob(bg) +
-  draw_plot(legend)
 
 # save SVG legend
-ggsave("alameda_income_legend.svg", plot = leg_plot,
+ggsave("alameda_income_legend.svg", plot = legend,
        width = 3, height = 3, bg = "transparent")
-
-# add legend to leaflet
-img <- "https://davidelambert.com/img/alameda_income_legend.svg"
-m %<>%
-  addLogo(
-    img,
-    url = "https://davidelambert.com/img/",
-    position = "topright",
-    width = 140,
-    height = 140,
-    offset.x = 10,
-    offset.y = 64
-  )
-
-m
-
-m
 ```
 
 
+We'll want our legend style to match the existing controls for layer switching, zoom, fullscreen, etc. For that, we'll need to replicate and slightly tweek those controls' CSS classes. Depending on a site's specific styling, these may need some additional tweaking, but adding these classes to your CSS should be a good start.
 
+```
+.legend-bivar {
+  padding: 2px;
+  font: 10px Arial, Helvetica, sans-serif;
+  background: white;
+  box-shadow: none;
+  border: black;
+  border: 2px solid rgba(0,0,0,0.2);
+  border-radius: 5px;
+  background-clip: padding-box;
+}
 
-```{r legend bg & map INVISIBLE, echo=FALSE}
-# add legend to map, using URL so it actually works
-img <- "https://davidelambert.com/img/alameda_income_legend.svg"
+.legend-bivar img{
+  margin: 0;
+}
+```
+
+We can now add our saved legend image with `addControl()`, applying the above CSS with the `className` argument. 
+
+```{r add legend}
 m %<>%
-  addLogo(
-    img,
-    url = "https://davidelambert.com/img/",
+  addControl(
+    "<img src = 'https://davidelambert.com/img/alameda_income_legend.svg' width = '128' height = '128'>",
     position = "topright",
-    width = 140,
-    height = 140,
-    offset.x = 10,
-    offset.y = 64
+    className = "legend-bivar"
   )
 
 m
 ```
+<p class = "leaflet-caption">Source: American Community Survey 5-Year Estimates, 2017</p>
 
+And there we have it! An interactive bivariate choropleth with custom legend.
 
 

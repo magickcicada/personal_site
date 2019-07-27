@@ -1,2 +1,2 @@
 /* Source Themes Academic v4.3.0 | https://sourcethemes.com/academic/ */
-body{background-color:#edebe9}article{background-color:#edebe9}code{color:#000;background-color:#edebe9}table{font-size:1rem}img[src*="#smallmargin"]{margin-top:.5rem;margin-bottom:.1rem}
+body{background-color:#edebe9}article{background-color:#edebe9}code{color:#000;background-color:#edebe9}h2{margin-top:3rem;font-size:1.5rem}table{font-size:1rem}img[src*="#smallmargin"]{margin-top:.5rem;margin-bottom:.1rem}.legend-bivar{padding:2px;font:10px Arial,Helvetica,sans-serif;background:#fff;box-shadow:none;border:#000;border:2px solid rgba(0,0,0,.2);border-radius:5px;background-clip:padding-box}.legend-bivar img{margin:0}.leaflet-caption{font-size:.6rem}.table-caption{font-size:.6rem;margin-top:-.5rem}
